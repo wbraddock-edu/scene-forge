@@ -2,6 +2,44 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// ── Auth & User Tables ──
+
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  displayName: text("display_name").notNull(),
+  role: text("role").notNull().default("trial"),
+  googleApiKey: text("google_api_key"),
+  openaiApiKey: text("openai_api_key"),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  subscriptionStatus: text("subscription_status"),
+  subscriptionPlan: text("subscription_plan"),
+  subscriptionExpiresAt: text("subscription_expires_at"),
+  trialStartedAt: text("trial_started_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const authSessions = sqliteTable("auth_sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  token: text("token").notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const projects = sqliteTable("projects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull(),
+  name: text("name").notNull(),
+  stateJson: text("state_json"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// ── App Tables ──
+
 export const scenes = sqliteTable("scenes", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   visitorId: text("visitor_id").notNull(),
@@ -9,6 +47,7 @@ export const scenes = sqliteTable("scenes", {
   sceneNumber: text("scene_number").notNull(),
   sourceType: text("source_type").notNull(),
   profileJson: text("profile_json").notNull(),
+  projectId: integer("project_id"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -16,8 +55,22 @@ export const insertSceneSchema = createInsertSchema(scenes).omit({
   id: true,
 });
 
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+});
+
+export const insertProjectSchema = createInsertSchema(projects).omit({
+  id: true,
+});
+
 export type InsertScene = z.infer<typeof insertSceneSchema>;
 export type Scene = typeof scenes.$inferSelect;
+
+export type InsertUser = z.infer<typeof insertUserSchema>;
+export type User = typeof users.$inferSelect;
+
+export type InsertProject = z.infer<typeof insertProjectSchema>;
+export type Project = typeof projects.$inferSelect;
 
 // Detected scene from manuscript scan
 export const detectedSceneSchema = z.object({

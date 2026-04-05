@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/components/theme-provider";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, setSessionToken, getSessionToken } from "@/lib/queryClient";
 import {
   Upload,
   FileText,
@@ -34,6 +34,10 @@ import {
   Copy,
   Check,
   FolderDown,
+  FolderOpen,
+  Plus,
+  Trash2,
+  Pencil,
   LayoutGrid,
   PlayCircle,
   Filter,
@@ -47,12 +51,19 @@ import {
   Layers,
   Camera,
   ChevronDown,
+  LogIn,
+  LogOut,
+  UserPlus,
+  KeyRound,
+  Crown,
+  Zap,
+  CreditCard,
 } from "lucide-react";
 import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
 import { DEMO_SCENES, DEMO_PROFILE } from "@/lib/demo-data";
 
-type Step = "upload" | "configure" | "dashboard" | "analyzing" | "expanded";
+type Step = "auth" | "projects" | "account" | "upload" | "configure" | "dashboard" | "analyzing" | "expanded";
 
 interface Provider {
   id: "openai" | "anthropic" | "google";
@@ -165,6 +176,34 @@ export default function Home() {
   const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
 
+  // ── Auth state ──
+  const [authUser, setAuthUser] = useState<{ id: number; email: string; displayName: string } | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // ── Project state ──
+  const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState("");
+  const [projectList, setProjectList] = useState<any[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [renamingProjectId, setRenamingProjectId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [sessionLoaded, setSessionLoaded] = useState(false);
+
+  // ── Account / subscription state ──
+  const [subStatus, setSubStatus] = useState<any>(null);
+  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("yearly");
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [googleApiKey, setGoogleApiKey] = useState("");
+  const [showGoogleApiKey, setShowGoogleApiKey] = useState(false);
+  const [savingApiKey, setSavingApiKey] = useState(false);
+
   // Flow state
   const [step, setStep] = useState<Step>("upload");
   const [manuscriptText, setManuscriptText] = useState("");
@@ -201,6 +240,215 @@ export default function Home() {
   const imageProvider = provider === "anthropic" ? "openai" : provider;
   const developedCount = Object.keys(developedScenes).length;
 
+  // ── Check auth on mount ──
+  useEffect(() => {
+    if (getSessionToken()) {
+      (async () => {
+        try {
+          const res = await apiRequest("GET", "/api/auth/me");
+          const user = await res.json();
+          setAuthUser(user);
+        } catch {
+          setSessionToken(null);
+        }
+        setAuthChecked(true);
+      })();
+    } else {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  // ── Load subscription status ──
+  useEffect(() => {
+    if (authUser) {
+      apiRequest("GET", "/api/subscription/status")
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) setSubStatus(data); })
+        .catch(() => {});
+    }
+  }, [authUser, step]);
+
+  // ── Load project list on auth ──
+  const loadProjectList = useCallback(async () => {
+    try {
+      setProjectsLoading(true);
+      const res = await apiRequest("GET", "/api/projects");
+      if (res.ok) {
+        const data = await res.json();
+        setProjectList(data.projects || data || []);
+      }
+    } catch { /* no projects yet */ }
+    setProjectsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (authUser && !activeProjectId) loadProjectList();
+  }, [authUser, activeProjectId, loadProjectList]);
+
+  // ── Open a project: load its state ──
+  const openProject = useCallback(async (projectId: number) => {
+    try {
+      const res = await apiRequest("GET", `/api/projects/${projectId}`);
+      if (!res.ok) return;
+      const { state, name } = await res.json();
+      setActiveProjectId(projectId);
+      setActiveProjectName(name);
+      if (state && Object.keys(state).length > 0) {
+        if (state.manuscriptText) setManuscriptText(state.manuscriptText);
+        if (state.sourceType) setSourceType(state.sourceType);
+        if (state.provider) setProvider(state.provider);
+        if (state.apiKey) setApiKey(state.apiKey);
+        if (state.selectedStyle) setSelectedStyle(state.selectedStyle);
+        if (state.detectedScenes?.length) {
+          setDetectedScenes(state.detectedScenes);
+          setStep("dashboard");
+        } else {
+          setStep("upload");
+        }
+        if (state.developedScenes) setDevelopedScenes(state.developedScenes);
+        if (state.referenceImages) setReferenceImages(state.referenceImages);
+      } else {
+        setStep("upload");
+      }
+      setSessionLoaded(true);
+    } catch (err) {
+      console.error("Failed to load project:", err);
+    }
+  }, []);
+
+  // ── Create a new project ──
+  const createProject = useCallback(async (name: string) => {
+    try {
+      const res = await apiRequest("POST", "/api/projects", { name });
+      if (!res.ok) return;
+      const data = await res.json();
+      const id = data.id || data.project?.id;
+      // Reset workspace state for new project
+      setManuscriptText(""); setSourceType("screenplay"); setDetectedScenes([]);
+      setDevelopedScenes({}); setReferenceImages([]); setStep("upload");
+      setActiveProjectId(id);
+      setActiveProjectName(name);
+      setSessionLoaded(true);
+    } catch (err) {
+      console.error("Failed to create project:", err);
+    }
+  }, []);
+
+  // ── Rename a project ──
+  const handleRenameProject = useCallback(async (projectId: number) => {
+    if (!renameValue.trim()) return;
+    try {
+      await apiRequest("PATCH", `/api/projects/${projectId}/rename`, { name: renameValue.trim() });
+      if (activeProjectId === projectId) setActiveProjectName(renameValue.trim());
+      setRenamingProjectId(null);
+      loadProjectList();
+    } catch {}
+  }, [renameValue, activeProjectId, loadProjectList]);
+
+  // ── Delete a project ──
+  const deleteProject = useCallback(async (projectId: number) => {
+    try {
+      await apiRequest("DELETE", `/api/projects/${projectId}`);
+      loadProjectList();
+    } catch {}
+  }, [loadProjectList]);
+
+  // ── Back to project list ──
+  const backToProjects = useCallback(async () => {
+    if (activeProjectId) {
+      try {
+        await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
+          state: {
+            manuscriptText,
+            sourceType,
+            provider,
+            apiKey,
+            selectedStyle,
+            detectedScenes,
+            developedScenes,
+            referenceImages,
+          },
+        });
+      } catch { /* silent */ }
+    }
+    setActiveProjectId(null);
+    setActiveProjectName("");
+    setSessionLoaded(false);
+    setStep("upload");
+    setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({});
+    setReferenceImages([]);
+    loadProjectList();
+  }, [loadProjectList, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages]);
+
+  // ── Auto-save to active project (debounced) ──
+  const saveTimeout = useRef<any>(null);
+  useEffect(() => {
+    if (!sessionLoaded || !activeProjectId) return;
+    if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    saveTimeout.current = setTimeout(async () => {
+      try {
+        await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
+          state: {
+            manuscriptText,
+            sourceType,
+            provider,
+            apiKey,
+            selectedStyle,
+            detectedScenes,
+            developedScenes,
+            referenceImages,
+          },
+        });
+      } catch { /* silent */ }
+    }, 2000);
+  }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages]);
+
+  // ── Auth submit ──
+  async function handleAuthSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      const endpoint = authMode === "register" ? "/api/auth/register" : "/api/auth/login";
+      const body: any = { email: authEmail, password: authPassword };
+      if (authMode === "register") body.displayName = authDisplayName;
+
+      const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+      const res = await fetch(API_BASE + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || data.message || "Auth failed");
+
+      setSessionToken(data.token);
+      setAuthUser(data.user);
+    } catch (err: any) {
+      setAuthError(err.message);
+    }
+    setAuthLoading(false);
+  }
+
+  // ── Logout ──
+  async function handleLogout() {
+    if (activeProjectId) {
+      try {
+        await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
+          state: { manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages },
+        });
+      } catch { /* silent */ }
+    }
+    apiRequest("POST", "/api/auth/logout").catch(() => {});
+    setSessionToken(null);
+    setAuthUser(null);
+    setActiveProjectId(null);
+    setActiveProjectName("");
+    setSessionLoaded(false);
+    setStep("upload");
+    setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({}); setReferenceImages([]);
+  }
+
   // File upload handler
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -209,10 +457,7 @@ export default function Home() {
       const text = await file.text();
       setManuscriptText(text);
     } else if (file.name.endsWith(".docx")) {
-      const formData = new FormData();
-      formData.append("file", file);
       const arrayBuf = await file.arrayBuffer();
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
       try {
         const mammoth = await import("mammoth");
         const result = await (mammoth as any).extractRawText({ arrayBuffer: arrayBuf });
@@ -244,7 +489,7 @@ export default function Home() {
     setReferenceImages((prev) => [...prev, ...newRefs].slice(0, 6));
   }, [referenceImages.length]);
 
-  // Load demo
+  // Load demo (now goes to dashboard directly without needing a project)
   const loadDemo = useCallback(() => {
     setDetectedScenes(DEMO_SCENES);
     setDevelopedScenes({
@@ -319,18 +564,12 @@ export default function Home() {
     for (const scene of undeveloped) {
       try {
         await developScene(scene);
-        // 5s delay between calls
         if (undeveloped.indexOf(scene) < undeveloped.length - 1) {
           await new Promise((r) => setTimeout(r, 5000));
         }
       } catch {
-        // Auto-retry once after 5s
         await new Promise((r) => setTimeout(r, 5000));
-        try {
-          await developScene(scene);
-        } catch {
-          // Skip and continue
-        }
+        try { await developScene(scene); } catch { /* Skip */ }
       }
     }
     setDevelopingAll(false);
@@ -365,7 +604,7 @@ export default function Home() {
     }
   }, [expandedScene, selectedStyle, referenceImages, imageProvider, apiKey, toast]);
 
-  // Generate all images (skip custom)
+  // Generate all images
   const generateAllImages = useCallback(async () => {
     if (!expandedScene || !developedScenes[expandedScene]) return;
     setGeneratingAll(true);
@@ -462,6 +701,382 @@ export default function Home() {
       return a.sceneName.localeCompare(b.sceneName);
     });
 
+  // ── AUTH LOADING ──
+  if (!authChecked) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#0a0b0d]">
+        <Loader2 className="h-8 w-8 animate-spin text-[#00d4aa]" />
+      </div>
+    );
+  }
+
+  // ── AUTH GATE ──
+  if (!authUser) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4" style={{ background: "hsl(225,15%,4%)" }}>
+        <div className="w-full max-w-sm">
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <div className="flex justify-center mb-3">
+              <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-16 h-16 rounded-xl object-contain" />
+            </div>
+            <h1 className="text-xl font-semibold tracking-wide uppercase" style={{ color: "hsl(163,100%,42%)" }}>SCENE FORGE</h1>
+            <p className="text-xs font-mono tracking-wider uppercase mt-1" style={{ color: "hsl(220,5%,68%)" }}>
+              Scene Breakdown &amp; Shot List
+            </p>
+          </div>
+
+          <Card className="border" style={{ background: "hsl(225,12%,14%)", borderColor: "hsl(225,10%,24%)" }}>
+            <CardContent className="p-5">
+              {/* Tab toggle */}
+              <div className="flex gap-1 mb-5 p-0.5 rounded-md" style={{ background: "hsl(225,12%,8%)" }}>
+                <button
+                  className={`flex-1 text-sm py-2 rounded font-medium transition-colors ${
+                    authMode === "login" ? "bg-[#00d4aa] text-black" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => { setAuthMode("login"); setAuthError(""); }}
+                >
+                  Sign In
+                </button>
+                <button
+                  className={`flex-1 text-sm py-2 rounded font-medium transition-colors ${
+                    authMode === "register" ? "bg-[#00d4aa] text-black" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => { setAuthMode("register"); setAuthError(""); }}
+                >
+                  Create Account
+                </button>
+              </div>
+
+              <form onSubmit={handleAuthSubmit} className="space-y-3">
+                {authMode === "register" && (
+                  <div>
+                    <label className="text-xs font-mono tracking-wider uppercase block mb-1.5" style={{ color: "hsl(220,5%,72%)" }}>Display Name</label>
+                    <Input
+                      type="text"
+                      value={authDisplayName}
+                      onChange={(e) => setAuthDisplayName(e.target.value)}
+                      placeholder="Your name"
+                      className="text-sm"
+                      style={{ background: "hsl(225,12%,10%)", borderColor: "hsl(225,10%,26%)", color: "hsl(0,0%,95%)" }}
+                      required
+                    />
+                  </div>
+                )}
+                <div>
+                  <label className="text-xs font-mono tracking-wider uppercase block mb-1.5" style={{ color: "hsl(220,5%,72%)" }}>Email</label>
+                  <Input
+                    type="email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="text-sm"
+                    style={{ background: "hsl(225,12%,10%)", borderColor: "hsl(225,10%,26%)", color: "hsl(0,0%,95%)" }}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-mono tracking-wider uppercase block mb-1.5" style={{ color: "hsl(220,5%,72%)" }}>Password</label>
+                  <Input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                    className="text-sm"
+                    style={{ background: "hsl(225,12%,10%)", borderColor: "hsl(225,10%,26%)", color: "hsl(0,0%,95%)" }}
+                    required
+                    minLength={6}
+                  />
+                </div>
+                <Button type="submit" className="w-full gap-2 mt-2 bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black font-semibold" disabled={authLoading}>
+                  {authLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : authMode === "login" ? (
+                    <><LogIn className="w-4 h-4" /> Sign In</>
+                  ) : (
+                    <><UserPlus className="w-4 h-4" /> Create Account</>
+                  )}
+                </Button>
+                {authMode === "login" && (
+                  <button
+                    type="button"
+                    className="w-full text-xs hover:text-foreground transition-colors mt-2"
+                    style={{ color: "hsl(220,5%,65%)" }}
+                    onClick={() => {}}
+                  >
+                    Forgot your password?
+                  </button>
+                )}
+                {authError && (
+                  <div className="text-xs text-red-400 bg-red-400/10 rounded px-3 py-2 flex items-start gap-2">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>{authError}</span>
+                  </div>
+                )}
+              </form>
+            </CardContent>
+          </Card>
+
+          <p className="text-xs text-center mt-6" style={{ color: "hsl(220,5%,55%)" }}>
+            Your scenes and shot lists are stored securely per account.
+          </p>
+          <p className="text-xs text-center mt-4" style={{ color: "hsl(220,5%,30%)" }}>
+            Created with AI by{" "}
+            <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
+              Little Red Apple Productions
+            </a>{" "}
+            &copy; 2026
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── PROJECT LIST ──
+  if (!activeProjectId) {
+    return (
+      <div className="min-h-screen flex flex-col" style={{ background: "hsl(225,15%,4%)" }}>
+        {/* Header */}
+        <header className="h-12 flex items-center px-4 gap-3 shrink-0" style={{ borderBottom: "1px solid hsl(225,10%,12%)" }}>
+          <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-7 h-7 rounded object-contain" />
+          <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>SCENE FORGE</span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded" style={{ background: "hsla(163,100%,42%,0.08)", border: "1px solid hsla(163,100%,42%,0.15)" }}>
+            <LayoutGrid className="w-3 h-3" style={{ color: "hsl(163,100%,42%)" }} />
+            <span className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "hsl(163,100%,42%)" }}>Dashboard</span>
+          </div>
+          <div className="flex-1" />
+          <span className="text-[10px] text-muted-foreground font-mono hidden sm:inline">{authUser?.displayName}</span>
+          <button
+            onClick={() => setStep("account")}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+            style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}
+          >
+            {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+          </button>
+        </header>
+
+        {/* Account page or Project list */}
+        {step === "account" ? (
+          <AccountPage
+            authUser={authUser}
+            subStatus={subStatus}
+            billingCycle={billingCycle}
+            setBillingCycle={setBillingCycle}
+            checkoutLoading={checkoutLoading}
+            setCheckoutLoading={setCheckoutLoading}
+            googleApiKey={googleApiKey}
+            setGoogleApiKey={setGoogleApiKey}
+            showGoogleApiKey={showGoogleApiKey}
+            setShowGoogleApiKey={setShowGoogleApiKey}
+            savingApiKey={savingApiKey}
+            setSavingApiKey={setSavingApiKey}
+            onBack={() => setStep("upload")}
+            onLogout={handleLogout}
+          />
+        ) : (
+          <div className="flex-1 overflow-y-auto">
+            <div className="max-w-3xl mx-auto px-4 py-10">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <h1 className="text-xl font-semibold" style={{ color: "hsl(180,5%,88%)" }}>Your Projects</h1>
+                  <p className="text-xs font-mono mt-1" style={{ color: "hsl(220,5%,62%)" }}>
+                    {projectList.length} project{projectList.length !== 1 ? "s" : ""}
+                  </p>
+                </div>
+              </div>
+
+              {/* New Project */}
+              <div className="rounded-lg p-5 mb-6" style={{ background: "hsl(225,15%,10%)", border: "1px solid hsl(225,10%,18%)" }}>
+                <div className="flex items-center gap-3">
+                  <Input
+                    value={newProjectName}
+                    onChange={(e) => setNewProjectName(e.target.value)}
+                    placeholder="New project name..."
+                    className="flex-1 text-sm bg-background border-border/50"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newProjectName.trim()) {
+                        createProject(newProjectName.trim());
+                        setNewProjectName("");
+                      }
+                    }}
+                  />
+                  <Button
+                    onClick={() => {
+                      if (newProjectName.trim()) {
+                        createProject(newProjectName.trim());
+                        setNewProjectName("");
+                      }
+                    }}
+                    className="bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black font-semibold text-sm gap-2"
+                    disabled={!newProjectName.trim()}
+                  >
+                    <Plus className="w-4 h-4" />
+                    New Project
+                  </Button>
+                </div>
+              </div>
+
+              {/* Load Demo Banner */}
+              {!projectsLoading && !projectList.some((p: any) => p.name?.includes("Demo")) && (
+                <div className="rounded-lg p-5 mb-6 text-center" style={{ background: "hsla(163,100%,42%,0.04)", border: "1px dashed hsla(163,100%,42%,0.2)" }}>
+                  <Sparkles className="w-5 h-5 mx-auto mb-2" style={{ color: "hsl(163,100%,42%)" }} />
+                  <p className="text-sm font-semibold mb-1" style={{ color: "hsl(180,5%,88%)" }}>Try a Sample Project</p>
+                  <p className="text-xs mb-3" style={{ color: "hsl(220,5%,55%)" }}>Load a sci-fi derelict ship scenario with 8 detected scenes and 1 fully developed profile.</p>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        const createRes = await apiRequest("POST", "/api/projects", { name: "Demo — Sci-Fi Derelict Ship" });
+                        if (!createRes.ok) return;
+                        const data = await createRes.json();
+                        const id = data.id || data.project?.id;
+                        const demoState = {
+                          manuscriptText: "[Demo manuscript loaded — sci-fi derelict ship scenario]",
+                          sourceType: "screenplay",
+                          detectedScenes: DEMO_SCENES,
+                          developedScenes: { "2": { profile: DEMO_PROFILE, images: {} } },
+                          referenceImages: [],
+                        };
+                        await apiRequest("PUT", `/api/projects/${id}`, { state: demoState });
+                        openProject(id);
+                      } catch (err) { console.error("Failed to load demo:", err); }
+                    }}
+                    className="bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black font-semibold text-sm gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Load Demo Project
+                  </Button>
+                </div>
+              )}
+
+              {/* Project List */}
+              {projectsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: "hsl(163,100%,42%)" }} />
+                </div>
+              ) : projectList.length === 0 ? (
+                <div className="text-center py-16">
+                  <FolderOpen className="w-10 h-10 mx-auto mb-3" style={{ color: "hsl(220,5%,25%)" }} />
+                  <p className="text-sm" style={{ color: "hsl(220,5%,52%)" }}>No projects yet</p>
+                  <p className="text-[10px] font-mono mt-1" style={{ color: "hsl(220,5%,35%)" }}>Create your first project above to get started</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {projectList.map((proj: any) => (
+                    <div
+                      key={proj.id}
+                      className="rounded-lg p-4 flex items-center gap-4 cursor-pointer transition-all group hover:border-[#00d4aa]/30"
+                      style={{ background: "hsl(225,15%,10%)", border: "1px solid hsl(225,10%,18%)" }}
+                      onClick={() => renamingProjectId !== proj.id && openProject(proj.id)}
+                    >
+                      <div className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style={{ background: "hsla(163,100%,42%,0.12)" }}>
+                        <Clapperboard className="w-5 h-5" style={{ color: "hsl(163,100%,42%)" }} />
+                      </div>
+                      {renamingProjectId === proj.id ? (
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <Input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleRenameProject(proj.id);
+                              if (e.key === "Escape") setRenamingProjectId(null);
+                            }}
+                            className="text-sm h-9"
+                            style={{ background: "hsl(225,12%,7%)", borderColor: "hsl(225,10%,22%)", color: "hsl(0,0%,95%)" }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button onClick={(e) => { e.stopPropagation(); handleRenameProject(proj.id); }} style={{ color: "hsl(163,100%,42%)" }}>
+                            <Check className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-sm font-semibold truncate group-hover:text-[#00d4aa] transition-colors" style={{ color: "hsl(0,0%,95%)" }}>
+                            {proj.name}
+                          </h3>
+                          <p className="text-[10px] font-mono mt-0.5" style={{ color: "hsl(220,5%,62%)" }}>
+                            {proj.sceneCount != null
+                              ? `${proj.sceneCount} scene${proj.sceneCount !== 1 ? "s" : ""}${proj.developedCount > 0 ? ` · ${proj.developedCount} developed` : ""}`
+                              : "No scenes yet"}
+                          </p>
+                        </div>
+                      )}
+                      <p className="text-[10px] font-mono hidden sm:block" style={{ color: "hsl(220,5%,55%)" }}>
+                        {proj.updatedAt ? new Date(proj.updatedAt).toLocaleDateString() : ""}
+                      </p>
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setRenamingProjectId(proj.id); setRenameValue(proj.name); }}
+                          className="p-1.5 rounded"
+                          style={{ color: "hsl(220,5%,55%)" }}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); if (confirm(`Delete "${proj.name}"?`)) deleteProject(proj.id); }}
+                          className="p-1.5 rounded"
+                          style={{ color: "hsl(0,72%,65%)" }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="py-8 mt-6 border-t" style={{ borderColor: "hsl(225,10%,12%)" }}>
+                <p className="text-xs text-center font-mono" style={{ color: "hsl(220,5%,30%)" }}>
+                  Created with AI &copy; 2026{" "}
+                  <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
+                    Little Red Apple Productions
+                  </a>
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── ACCOUNT PAGE (within a project) ──
+  if (step === "account") {
+    return (
+      <div className="min-h-screen flex flex-col" style={{ background: "hsl(225,15%,4%)" }}>
+        <header className="h-12 flex items-center px-4 gap-3 shrink-0" style={{ borderBottom: "1px solid hsl(225,10%,12%)" }}>
+          <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-7 h-7 rounded object-contain" />
+          <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>SCENE FORGE</span>
+          <div className="flex-1" />
+          <button
+            onClick={() => setStep("account")}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+            style={{ background: "hsl(163,100%,42%)", color: "black" }}
+          >
+            {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+          </button>
+        </header>
+        <AccountPage
+          authUser={authUser}
+          subStatus={subStatus}
+          billingCycle={billingCycle}
+          setBillingCycle={setBillingCycle}
+          checkoutLoading={checkoutLoading}
+          setCheckoutLoading={setCheckoutLoading}
+          googleApiKey={googleApiKey}
+          setGoogleApiKey={setGoogleApiKey}
+          showGoogleApiKey={showGoogleApiKey}
+          setShowGoogleApiKey={setShowGoogleApiKey}
+          savingApiKey={savingApiKey}
+          setSavingApiKey={setSavingApiKey}
+          onBack={() => setStep("dashboard")}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   // ── UPLOAD STEP ──
   if (step === "upload" || step === "configure") {
     return (
@@ -470,25 +1085,40 @@ export default function Home() {
         <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50" data-testid="header">
           <div className="max-w-6xl mx-auto px-4 h-12 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <img src="./lrap-logo.jpg" alt="LRAP" className="w-8 h-8 rounded-sm object-contain shrink-0" data-testid="logo" />
+              <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-8 h-8 rounded-sm object-contain shrink-0" data-testid="logo" />
               <span className="font-semibold text-sm tracking-wide text-foreground">SCENE FORGE</span>
               <span className="text-[11px] font-mono text-muted-foreground">v4.2</span>
-              <span className="text-[11px] text-muted-foreground hidden sm:inline">— by Little Red Apple Productions</span>
+              {activeProjectName && (
+                <span className="text-[11px] text-muted-foreground hidden sm:inline">— {activeProjectName}</span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={loadDemo} data-testid="btn-demo" className="text-xs">
                 <Sparkles className="w-3.5 h-3.5 mr-1" />Demo
               </Button>
+              {activeProjectId && (
+                <Button variant="ghost" size="sm" onClick={backToProjects} className="text-xs">
+                  <ArrowLeft className="w-3.5 h-3.5 mr-1" />Projects
+                </Button>
+              )}
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleTheme} data-testid="btn-theme">
                 {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </Button>
+              {/* Avatar */}
+              <button
+                onClick={() => setStep("account")}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}
+              >
+                {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+              </button>
             </div>
           </div>
         </header>
 
         <main className="max-w-4xl mx-auto px-4 py-8">
           <div className="text-center mb-8">
-            <h1 className="text-xl font-bold text-foreground mb-1" data-testid="text-title">Scene Breakdown & Shot List</h1>
+            <h1 className="text-xl font-bold text-foreground mb-1" data-testid="text-title">Scene Breakdown &amp; Shot List</h1>
             <p className="text-sm text-muted-foreground">Upload a manuscript or screenplay to scan for scenes and develop detailed breakdowns</p>
           </div>
 
@@ -593,7 +1223,7 @@ export default function Home() {
                 {!currentProvider.supportsImages && (
                   <p className="text-[11px] text-muted-foreground">
                     <AlertCircle className="w-3 h-3 inline mr-1" />
-                    {currentProvider.name} doesn't support image generation. Visuals will use OpenAI.
+                    {currentProvider.name} doesn&apos;t support image generation. Visuals will use OpenAI.
                   </p>
                 )}
               </CardContent>
@@ -634,7 +1264,7 @@ export default function Home() {
         <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50" data-testid="header-expanded">
           <div className="max-w-[1600px] mx-auto px-4 h-12 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <img src="./lrap-logo.jpg" alt="LRAP" className="w-8 h-8 rounded-sm object-contain shrink-0" />
+              <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-8 h-8 rounded-sm object-contain shrink-0" />
               <span className="font-semibold text-sm tracking-wide text-foreground">SCENE FORGE</span>
               <span className="text-[11px] font-mono text-muted-foreground">v4.2</span>
             </div>
@@ -645,6 +1275,14 @@ export default function Home() {
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleTheme} data-testid="btn-theme-expanded">
                 {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </Button>
+              {/* Avatar */}
+              <button
+                onClick={() => setStep("account")}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}
+              >
+                {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+              </button>
             </div>
           </div>
         </header>
@@ -900,10 +1538,12 @@ export default function Home() {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50" data-testid="header-dashboard">
         <div className="max-w-[1400px] mx-auto px-4 h-12 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src="./lrap-logo.jpg" alt="LRAP" className="w-8 h-8 rounded-sm object-contain shrink-0" />
+            <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-8 h-8 rounded-sm object-contain shrink-0" />
             <span className="font-semibold text-sm tracking-wide text-foreground">SCENE FORGE</span>
             <span className="text-[11px] font-mono text-muted-foreground">v4.2</span>
-            <span className="text-[11px] text-muted-foreground hidden sm:inline">— by Little Red Apple Productions</span>
+            {activeProjectName && (
+              <span className="text-[11px] text-muted-foreground hidden sm:inline">— {activeProjectName}</span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono text-muted-foreground" data-testid="text-progress">
@@ -917,9 +1557,22 @@ export default function Home() {
             <Button variant="ghost" size="sm" className="text-xs" onClick={() => setStep("upload")} data-testid="btn-new-scan">
               New Scan
             </Button>
+            {activeProjectId && (
+              <Button variant="ghost" size="sm" className="text-xs" onClick={backToProjects} data-testid="btn-projects">
+                <ArrowLeft className="w-3.5 h-3.5 mr-1" />Projects
+              </Button>
+            )}
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleTheme} data-testid="btn-theme-dash">
               {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </Button>
+            {/* Avatar */}
+            <button
+              onClick={() => setStep("account")}
+              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+              style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}
+            >
+              {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+            </button>
           </div>
         </div>
       </header>
@@ -1178,7 +1831,10 @@ export default function Home() {
         {/* Footer */}
         <div className="py-6 mt-6 border-t border-border">
           <p className="text-xs text-muted-foreground/50 text-center font-mono tracking-wide">
-            Created with the Assistance of AI &copy; 2026 <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">Little Red Apple Productions</a>
+            Created with the Assistance of AI &copy; 2026{" "}
+            <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
+              Little Red Apple Productions
+            </a>
           </p>
         </div>
       </main>
@@ -1186,7 +1842,251 @@ export default function Home() {
   );
 }
 
-// Midjourney copy button — uses textarea select + copy, NOT clipboard API
+// ── Account Page Component ──
+interface AccountPageProps {
+  authUser: { id: number; email: string; displayName: string } | null;
+  subStatus: any;
+  billingCycle: "monthly" | "yearly";
+  setBillingCycle: (v: "monthly" | "yearly") => void;
+  checkoutLoading: boolean;
+  setCheckoutLoading: (v: boolean) => void;
+  googleApiKey: string;
+  setGoogleApiKey: (v: string) => void;
+  showGoogleApiKey: boolean;
+  setShowGoogleApiKey: (v: boolean) => void;
+  savingApiKey: boolean;
+  setSavingApiKey: (v: boolean) => void;
+  onBack: () => void;
+  onLogout: () => void;
+}
+
+function AccountPage({
+  authUser,
+  subStatus,
+  billingCycle,
+  setBillingCycle,
+  checkoutLoading,
+  setCheckoutLoading,
+  googleApiKey,
+  setGoogleApiKey,
+  showGoogleApiKey,
+  setShowGoogleApiKey,
+  savingApiKey,
+  setSavingApiKey,
+  onBack,
+  onLogout,
+}: AccountPageProps) {
+  return (
+    <div className="flex-1 overflow-y-auto">
+      {/* Account sub-header */}
+      <div className="h-12 flex items-center px-4 gap-3" style={{ borderBottom: "1px solid hsl(225,10%,12%)" }}>
+        <button onClick={onBack} className="p-1 rounded" style={{ color: "hsl(220,5%,52%)" }}>
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+        <span className="text-xs font-mono" style={{ color: "hsl(220,5%,52%)" }}>Account</span>
+        <div className="flex-1" />
+        <button
+          onClick={onLogout}
+          className="text-[10px] font-mono px-3 py-1 rounded flex items-center gap-1.5"
+          style={{ color: "hsl(220,5%,52%)", border: "1px solid hsl(225,10%,14%)" }}
+        >
+          <LogOut className="w-3 h-3" /> Sign Out
+        </button>
+      </div>
+
+      <div className="max-w-2xl mx-auto px-4 py-8">
+        {/* Profile Card */}
+        <div className="rounded-lg p-6 mb-6" style={{ background: "hsl(225,18%,6%)", border: "1px solid hsl(225,10%,12%)" }}>
+          <div className="flex items-start gap-4">
+            <div className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-bold" style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}>
+              {authUser?.displayName?.charAt(0)?.toUpperCase() || "?"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg font-semibold" style={{ color: "hsl(180,5%,88%)" }}>{authUser?.displayName}</h1>
+              <p className="text-sm font-mono" style={{ color: "hsl(220,5%,52%)" }}>{authUser?.email}</p>
+              <div className="flex items-center gap-2 mt-2">
+                {subStatus?.isAdmin ? (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono" style={{ background: "hsla(280,80%,65%,0.08)", color: "hsl(280,80%,65%)" }}>
+                    <Crown className="w-3 h-3" /> Creator
+                  </div>
+                ) : subStatus?.subscriptionActive ? (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono" style={{ background: "hsla(163,100%,42%,0.08)", color: "hsl(163,100%,42%)" }}>
+                    <CheckCircle2 className="w-3 h-3" /> Active Subscriber
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono" style={{ background: "hsla(163,100%,42%,0.08)", color: "hsl(163,100%,42%)" }}>
+                    <Clock className="w-3 h-3" /> Trial · {subStatus?.trialDaysRemaining ?? 7} day{(subStatus?.trialDaysRemaining ?? 7) !== 1 ? "s" : ""} left
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Google AI Key Section */}
+        <div className="rounded-lg p-5 mb-6" style={{ background: "hsl(225,18%,6%)", border: "1px solid hsl(225,10%,12%)" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <KeyRound className="w-4 h-4" style={{ color: "hsl(163,100%,42%)" }} />
+            <h2 className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(220,5%,52%)" }}>Google AI API Key</h2>
+          </div>
+          <p className="text-xs mb-3" style={{ color: "hsl(220,5%,52%)" }}>
+            Used for AI scene analysis. Get your key at{" "}
+            <a href="https://aistudio.google.com" target="_blank" rel="noopener" className="text-[#00d4aa]/80 hover:text-[#00d4aa]">
+              aistudio.google.com
+            </a>
+          </p>
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showGoogleApiKey ? "text" : "password"}
+                value={googleApiKey}
+                onChange={(e) => setGoogleApiKey(e.target.value)}
+                placeholder="AIza..."
+                className="text-sm font-mono pr-10"
+                style={{ background: "hsl(225,12%,10%)", borderColor: "hsl(225,10%,22%)", color: "hsl(0,0%,95%)" }}
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2"
+                style={{ color: "hsl(220,5%,52%)" }}
+                onClick={() => setShowGoogleApiKey(!showGoogleApiKey)}
+              >
+                {showGoogleApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <Button
+              size="sm"
+              className="bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black font-semibold text-xs"
+              disabled={savingApiKey || !googleApiKey.trim()}
+              onClick={async () => {
+                setSavingApiKey(true);
+                // Local save only — keys are stored client-side per session
+                setTimeout(() => setSavingApiKey(false), 800);
+              }}
+            >
+              {savingApiKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              Save
+            </Button>
+          </div>
+        </div>
+
+        {/* Upgrade Section */}
+        {subStatus && !subStatus.subscriptionActive && !subStatus.isAdmin && (
+          <div className="rounded-lg overflow-hidden mb-6" style={{ border: "1px solid hsl(225,10%,12%)" }}>
+            <div className="p-5" style={{ background: "linear-gradient(135deg, hsla(163,100%,42%,0.06), hsla(163,100%,42%,0.02))" }}>
+              <div className="flex items-center gap-2 mb-2">
+                <Crown className="w-4 h-4" style={{ color: "hsl(163,100%,42%)" }} />
+                <h2 className="text-sm font-semibold" style={{ color: "hsl(180,5%,88%)" }}>
+                  {!subStatus.canAccess ? "Your trial has ended" : "Upgrade to Scene Forge Pro"}
+                </h2>
+              </div>
+              <p className="text-xs" style={{ color: "hsl(220,5%,60%)" }}>
+                {!subStatus.canAccess
+                  ? "Subscribe to continue developing scenes with AI-powered profiles and visual studies."
+                  : "Unlock unlimited scene development after your trial ends."
+                }
+              </p>
+            </div>
+            <div className="px-5 pt-4">
+              <div className="flex items-center justify-center gap-1 p-1 rounded-lg" style={{ background: "hsl(225,15%,4%)" }}>
+                <button
+                  className="flex-1 text-center py-2 rounded-md text-xs font-mono font-semibold transition-colors"
+                  style={{ background: billingCycle === "monthly" ? "hsl(225,18%,8%)" : "transparent", color: billingCycle === "monthly" ? "hsl(180,5%,88%)" : "hsl(220,5%,40%)" }}
+                  onClick={() => setBillingCycle("monthly")}
+                >
+                  Monthly
+                </button>
+                <button
+                  className="flex-1 text-center py-2 rounded-md text-xs font-mono font-semibold transition-colors relative"
+                  style={{ background: billingCycle === "yearly" ? "hsl(225,18%,8%)" : "transparent", color: billingCycle === "yearly" ? "hsl(180,5%,88%)" : "hsl(220,5%,40%)" }}
+                  onClick={() => setBillingCycle("yearly")}
+                >
+                  Yearly <span className="ml-1.5 text-[9px] font-mono px-1.5 py-0.5 rounded-full" style={{ background: "hsla(163,100%,42%,0.12)", color: "hsl(163,100%,42%)" }}>SAVE 17%</span>
+                </button>
+              </div>
+            </div>
+            <div className="p-5">
+              <div className="text-center mb-4">
+                <div className="flex items-baseline justify-center gap-1">
+                  <span className="text-3xl font-bold font-mono tabular-nums" style={{ color: "hsl(163,100%,42%)" }}>${billingCycle === "yearly" ? "299" : "29.99"}</span>
+                  <span className="text-sm font-mono" style={{ color: "hsl(220,5%,40%)" }}>/{billingCycle === "yearly" ? "year" : "month"}</span>
+                </div>
+                {billingCycle === "yearly" && <p className="text-[10px] font-mono mt-1" style={{ color: "hsl(220,5%,52%)" }}>$24.92/mo · Save $60.88/year</p>}
+              </div>
+              <div className="space-y-2 mb-5">
+                {[
+                  "Unlimited scene scanning & development",
+                  "AI-powered 10-section scene profiles",
+                  "5-panel visual scene studies",
+                  "Shot list generation",
+                  "Multi-project workspace with auto-save",
+                  "DOCX export & ZIP image download",
+                  "10 art styles with reference image support",
+                ].map((f, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <CheckCircle2 className="w-3 h-3 shrink-0" style={{ color: "hsl(163,100%,42%)" }} />
+                    <span className="text-xs" style={{ color: "hsl(220,5%,65%)" }}>{f}</span>
+                  </div>
+                ))}
+              </div>
+              <Button
+                className="w-full h-10 font-mono font-semibold text-sm bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black"
+                onClick={async () => {
+                  setCheckoutLoading(true);
+                  try {
+                    const priceId = billingCycle === "yearly" ? "price_yearly" : "price_monthly";
+                    const res = await apiRequest("POST", "/api/stripe/create-checkout", { priceId });
+                    const data = await res.json();
+                    if (data.url) window.location.href = data.url;
+                  } catch {} finally { setCheckoutLoading(false); }
+                }}
+                disabled={checkoutLoading}
+              >
+                <Zap className="w-4 h-4 mr-2" />
+                {checkoutLoading ? "Redirecting..." : `Subscribe — $${billingCycle === "yearly" ? "299/yr" : "29.99/mo"}`}
+              </Button>
+              <p className="text-[9px] font-mono text-center mt-3" style={{ color: "hsl(220,5%,30%)" }}>Secure payment via Stripe. Cancel anytime.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Account Details */}
+        <div className="rounded-lg p-5 mb-6" style={{ background: "hsl(225,18%,6%)", border: "1px solid hsl(225,10%,12%)" }}>
+          <h2 className="text-xs font-mono font-semibold tracking-wider uppercase mb-3" style={{ color: "hsl(220,5%,52%)" }}>Account Details</h2>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between py-1.5" style={{ borderBottom: "1px solid hsl(225,10%,10%)" }}>
+              <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: "hsl(220,5%,40%)" }}>Name</span>
+              <span className="text-xs font-mono" style={{ color: "hsl(180,5%,88%)" }}>{authUser?.displayName}</span>
+            </div>
+            <div className="flex items-center justify-between py-1.5" style={{ borderBottom: "1px solid hsl(225,10%,10%)" }}>
+              <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: "hsl(220,5%,40%)" }}>Email</span>
+              <span className="text-xs font-mono" style={{ color: "hsl(180,5%,88%)" }}>{authUser?.email}</span>
+            </div>
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-[10px] font-mono uppercase tracking-wider" style={{ color: "hsl(220,5%,40%)" }}>Status</span>
+              <span className="text-xs font-mono" style={{ color: "hsl(163,100%,42%)" }}>
+                {subStatus?.isAdmin ? "Creator" : subStatus?.subscriptionActive ? "Active" : `Trial · ${subStatus?.trialDaysRemaining ?? 7}d left`}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Sign Out */}
+        <div className="rounded-lg p-4" style={{ background: "hsl(225,18%,6%)", border: "1px solid hsl(225,10%,12%)" }}>
+          <button
+            onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-mono transition-colors hover:bg-red-500/10"
+            style={{ color: "hsl(0,72%,65%)", border: "1px solid hsl(0,60%,30%)" }}
+          >
+            <LogOut className="w-4 h-4" /> Sign Out
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Midjourney copy button ──
 function MJCopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 

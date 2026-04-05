@@ -1,6 +1,12 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
+import { storage, createUser, getUserByEmail, getUserById, createSession, getSessionByToken, deleteSession, createProject, getProjectsByUserId, getProjectById, updateProject, deleteProject, renameProject } from "./storage";
+import { db, sqlite } from "./db";
+import { registerStripeRoutes } from "./stripe";
+import { users, authSessions, projects } from "@shared/schema";
+import { eq } from "drizzle-orm";
 import {
   scanRequestSchema,
   analyzeRequestSchema,
@@ -17,6 +23,44 @@ import {
   BorderStyle,
   AlignmentType,
 } from "docx";
+
+// Extend Express Request to carry authenticated userId
+declare global {
+  namespace Express {
+    interface Request {
+      userId?: number;
+    }
+  }
+}
+
+// ── Auth Middleware ──
+
+export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // Check Authorization header (Bearer token) or cookie
+  let token: string | undefined;
+
+  const authHeader = req.headers["authorization"];
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  } else if (req.cookies?.sessionToken) {
+    token = req.cookies.sessionToken;
+  } else if (req.headers["x-session-token"]) {
+    const h = req.headers["x-session-token"];
+    token = Array.isArray(h) ? h[0] : h;
+  }
+
+  if (!token) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const session = getSessionByToken(token);
+  if (!session || new Date(session.expiresAt) < new Date()) {
+    return res.status(401).json({ error: "Session expired or invalid" });
+  }
+
+  req.userId = session.userId;
+  next();
+}
 
 // ── AI Provider Abstraction ──
 
@@ -529,6 +573,238 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   // Set long timeouts for AI calls
   httpServer.timeout = 300000;
   httpServer.keepAliveTimeout = 300000;
+
+  // ── Auth Routes (before auth middleware — public) ──
+
+  app.post("/api/auth/register", async (req: Request, res: Response) => {
+    try {
+      const { email, password, displayName } = req.body;
+      if (!email || !password || !displayName) {
+        return res.status(400).json({ error: "email, password, and displayName are required" });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters" });
+      }
+      const existing = getUserByEmail(email);
+      if (existing) {
+        return res.status(409).json({ error: "An account with this email already exists" });
+      }
+      const passwordHash = bcrypt.hashSync(password, 10);
+      const now = new Date().toISOString();
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Creator email gets special role
+      const role = normalizedEmail === "designholistically@gmail.com" ? "creator" : "trial";
+
+      const user = db.insert(users).values({
+        email: normalizedEmail,
+        passwordHash,
+        displayName: displayName.trim(),
+        role,
+        trialStartedAt: now,
+        createdAt: now,
+      }).returning().get();
+
+      const token = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      createSession(user.id, token, expiresAt);
+
+      // Set cookie
+      res.cookie("sessionToken", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      return res.json({
+        token,
+        user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/auth/login", async (req: Request, res: Response) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: "email and password are required" });
+      }
+      const user = getUserByEmail(email);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      if (!bcrypt.compareSync(password, user.passwordHash)) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      const now = new Date().toISOString();
+      const token = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      createSession(user.id, token, expiresAt);
+
+      // Set cookie
+      res.cookie("sessionToken", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+      });
+
+      return res.json({
+        token,
+        user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/auth/logout", (req: Request, res: Response) => {
+    // Check both cookie and header for token
+    const rawTok = req.cookies?.sessionToken || req.headers["x-session-token"];
+    const token = Array.isArray(rawTok) ? rawTok[0] : rawTok;
+    if (token) {
+      deleteSession(token);
+    }
+    res.clearCookie("sessionToken");
+    return res.json({ ok: true });
+  });
+
+  app.get("/api/auth/me", (req: Request, res: Response) => {
+    // Check both cookie and header for token
+    const rawTok2 = req.cookies?.sessionToken || req.headers["x-session-token"];
+    const token = Array.isArray(rawTok2) ? rawTok2[0] : rawTok2;
+    if (!token) return res.status(401).json({ error: "Not authenticated" });
+
+    const session = getSessionByToken(token);
+    if (!session || new Date(session.expiresAt) < new Date()) {
+      return res.status(401).json({ error: "Session expired" });
+    }
+    const user = getUserById(session.userId);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    return res.json({
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      role: user.role,
+    });
+  });
+
+  app.post("/api/auth/forgot-password", (req: Request, res: Response) => {
+    // Stub — return success without revealing whether email exists
+    return res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
+  });
+
+  app.post("/api/auth/reset-password", (req: Request, res: Response) => {
+    // Stub
+    return res.json({ ok: true, message: "Password reset is not yet configured." });
+  });
+
+  // ── Project Routes (protected) ──
+
+  app.get("/api/projects", requireAuth, (req: Request, res: Response) => {
+    try {
+      const rows = sqlite.prepare(
+        `SELECT id, name, created_at, updated_at FROM projects WHERE user_id = ? ORDER BY updated_at DESC`
+      ).all(req.userId!) as any[];
+
+      const projects = rows.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      }));
+
+      return res.json({ projects });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/projects", requireAuth, (req: Request, res: Response) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== "string") return res.status(400).json({ error: "name required" });
+      const now = new Date().toISOString();
+      const result = sqlite.prepare(
+        `INSERT INTO projects (user_id, name, state_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?)`
+      ).run(req.userId!, name.trim(), now, now);
+      return res.json({ id: Number(result.lastInsertRowid), name: name.trim() });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/projects/:id", requireAuth, (req: Request, res: Response) => {
+    try {
+      const projectId = parseInt(String(req.params.id), 10);
+      const row = sqlite.prepare(
+        `SELECT id, name, state_json, created_at, updated_at FROM projects WHERE id = ? AND user_id = ?`
+      ).get(projectId, req.userId!) as any;
+      if (!row) return res.status(404).json({ error: "Project not found" });
+
+      // Send raw JSON string to avoid double-stringify which OOMs on large projects with base64 images
+      const stateStr = row.state_json || "{}";
+      const rawJson = `{"id":${row.id},"name":${JSON.stringify(row.name)},"state":${stateStr},"createdAt":${JSON.stringify(row.created_at)},"updatedAt":${JSON.stringify(row.updated_at)}}`;
+      res.setHeader("Content-Type", "application/json");
+      return res.send(rawJson);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put("/api/projects/:id", requireAuth, (req: Request, res: Response) => {
+    try {
+      const { state, name } = req.body;
+      const now = new Date().toISOString();
+      const updates: string[] = [];
+      const params: any[] = [];
+      if (state !== undefined) { updates.push("state_json = ?"); params.push(JSON.stringify(state)); }
+      if (name) { updates.push("name = ?"); params.push(name.trim()); }
+      updates.push("updated_at = ?"); params.push(now);
+      params.push(parseInt(String(req.params.id), 10), req.userId!);
+
+      sqlite.prepare(
+        `UPDATE projects SET ${updates.join(", ")} WHERE id = ? AND user_id = ?`
+      ).run(...params);
+
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/projects/:id", requireAuth, (req: Request, res: Response) => {
+    try {
+      sqlite.prepare(
+        `DELETE FROM projects WHERE id = ? AND user_id = ?`
+      ).run(parseInt(String(req.params.id), 10), req.userId!);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/projects/:id/rename", requireAuth, (req: Request, res: Response) => {
+    try {
+      const { name } = req.body;
+      if (!name || typeof name !== "string") return res.status(400).json({ error: "name required" });
+      sqlite.prepare(
+        `UPDATE projects SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?`
+      ).run(name.trim(), new Date().toISOString(), parseInt(String(req.params.id), 10), req.userId!);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Stripe Routes ──
+  registerStripeRoutes(app);
+
+  // ── Existing AI Routes (scan, analyze, generate-image, export) ──
 
   // Scan text for scenes
   app.post("/api/scan", async (req: Request, res: Response) => {
