@@ -41,6 +41,12 @@ import {
   MapPin,
   Clock,
   Users,
+  Box,
+  Mic,
+  Video,
+  Layers,
+  Camera,
+  ChevronDown,
 } from "lucide-react";
 import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
@@ -1049,9 +1055,133 @@ export default function Home() {
             );
           })}
         </div>
-      </main>
 
-      <PerplexityAttribution />
+        {/* FAQ Section */}
+        <div className="mt-10 max-w-3xl mx-auto">
+          <h2 className="text-sm font-mono font-semibold tracking-wider uppercase mb-4 text-muted-foreground">
+            Frequently Asked Questions
+          </h2>
+          {[
+            {
+              q: "What is Scene Forge?",
+              a: "Scene Forge is an AI-powered scene development tool that scans screenplays and prose manuscripts, breaks them into individual scenes, and generates comprehensive 10-section production profiles covering identity, dramatic purpose, characters, dialogue, blocking, shot lists, lighting, sound, VFX, and emotional mapping."
+            },
+            {
+              q: "Does this generate images or video?",
+              a: "Scene Forge generates 5-panel visual scene studies — storyboard-quality images that capture master shots, dramatic moments, character coverage, detail inserts, and lighting studies. It does NOT generate video. For video prompt translation, see Prompt Cinematographer."
+            },
+            {
+              q: "How does scene detection work?",
+              a: "The AI reads your full manuscript or screenplay text and identifies every distinct scene based on location changes, time jumps, and dramatic beat shifts. For screenplays, it uses INT./EXT. headings as anchors. For prose, it analyzes narrative structure to find scene boundaries."
+            },
+            {
+              q: "What AI providers are supported?",
+              a: "Scene Forge supports OpenAI (GPT-4o), Anthropic (Claude), and Google AI (Gemini). OpenAI and Google also support image generation for the visual scene studies. You provide your own API key — keys are never stored."
+            },
+            {
+              q: "What is the Visual Scene Study?",
+              a: "Each developed scene includes a 5-panel visual study: Master Shot (establishing), Key Dramatic Moment, Character Coverage, Detail Insert, and Lighting Study. Choose from 10 art styles (Cinematic, Photorealistic, Pixar, Anime, and more) and optionally upload reference images for visual consistency."
+            },
+            {
+              q: "Can I export scene profiles?",
+              a: "Yes. Export individual scene profiles or all developed scenes as DOCX files. The export includes all 10 sections plus any generated visual study images embedded in the document."
+            },
+          ].map((faq, i) => (
+            <details key={i} className="group mb-2 rounded-lg bg-card border border-border">
+              <summary className="flex items-center justify-between cursor-pointer px-4 py-3 text-sm font-medium text-foreground">
+                {faq.q}
+                <ChevronDown className="w-4 h-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <p className="px-4 pb-3 text-xs leading-relaxed text-muted-foreground">{faq.a}</p>
+            </details>
+          ))}
+        </div>
+
+        {/* Cross-Promotion: The Forge Suite */}
+        <div className="mt-10 max-w-4xl mx-auto">
+          <h2 className="text-sm font-mono font-semibold tracking-wider uppercase mb-2 text-muted-foreground">
+            The Forge Suite
+          </h2>
+          <p className="text-xs text-muted-foreground/70 mb-4">
+            Scene Forge is part of a complete AI production toolkit by Little Red Apple Productions.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[
+              {
+                name: "Character Forge",
+                url: "https://character.littleredappleproductions.com",
+                icon: Users,
+                desc: "AI-powered character development with multi-panel portrait studies and 11 art styles."
+              },
+              {
+                name: "Location Forge",
+                url: "https://location.littleredappleproductions.com",
+                icon: MapPin,
+                desc: "AI-powered location scouting and environment visualization for film production."
+              },
+              {
+                name: "Manuscript Forge",
+                url: "https://manuscript.littleredappleproductions.com",
+                icon: FileText,
+                desc: "Production readiness analysis for screenplays — story structure, character arcs, pacing, and dialogue."
+              },
+              {
+                name: "Props Forge",
+                url: "https://props.littleredappleproductions.com",
+                icon: Box,
+                desc: "AI-powered prop identification and visual development from manuscript analysis."
+              },
+              {
+                name: "Story Forge",
+                url: "https://github.com/wbraddock-edu/story-forge",
+                icon: BookOpen,
+                desc: "AI-assisted story development and screenplay writing with structured narrative tools."
+              },
+              {
+                name: "Sound Forge",
+                url: "https://github.com/wbraddock-edu/sound-forge",
+                icon: Mic,
+                desc: "AI-powered sound design — dialogue, ambience, foley, music cues, and scene sound profiles."
+              },
+              {
+                name: "Production Forge",
+                url: "https://github.com/wbraddock-edu/production-forge",
+                icon: Video,
+                desc: "Unified production pipeline — clip generation, voice performance, and motion animation."
+              },
+              {
+                name: "Prompt Cinematographer",
+                url: "https://github.com/wbraddock-edu/prompt-cinematographer",
+                icon: Camera,
+                desc: "Shot translation engine — converts cinematography language into AI video platform prompts."
+              },
+            ].map((mod) => (
+              <a
+                key={mod.name}
+                href={mod.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block rounded-lg p-4 bg-card border border-border hover:border-[#00d4aa]/40 transition-colors"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <mod.icon className="w-4 h-4 text-[#00d4aa]" />
+                  <span className="text-xs font-semibold text-foreground">{mod.name}</span>
+                </div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {mod.desc}
+                </p>
+              </a>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="py-6 mt-6 border-t border-border">
+          <p className="text-xs text-muted-foreground/50 text-center font-mono tracking-wide">
+            Created with the Assistance of AI &copy; 2026 <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">Little Red Apple Productions</a>
+          </p>
+        </div>
+      </main>
     </div>
   );
 }
