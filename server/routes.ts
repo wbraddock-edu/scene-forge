@@ -958,6 +958,100 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     }
   });
 
+  // ── Import Proxy Routes ──
+
+  // GET /api/import/sources — returns available import sources
+  app.get("/api/import/sources", requireAuth, (_req: Request, res: Response) => {
+    return res.json({
+      sources: [
+        { id: "characters", name: "Character Forge", url: "https://character.littleredappleproductions.com", icon: "Users" },
+        { id: "locations", name: "Location Forge", url: "https://location.littleredappleproductions.com", icon: "MapPin" },
+        { id: "props", name: "Props Forge", url: "https://props.littleredappleproductions.com", icon: "Box" },
+      ],
+    });
+  });
+
+  // GET /api/import/projects?source=characters — proxy to sibling app's shared projects
+  app.get("/api/import/projects", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const source = req.query.source as string;
+      if (!source) return res.status(400).json({ error: "source query param required" });
+
+      const SOURCES: Record<string, string> = {
+        characters: "https://character.littleredappleproductions.com",
+        locations: "https://location.littleredappleproductions.com",
+        props: "https://props.littleredappleproductions.com",
+      };
+      const baseUrl = SOURCES[source];
+      if (!baseUrl) return res.status(400).json({ error: `Unknown source: ${source}` });
+
+      const secret = process.env.FORGE_CROSS_APP_SECRET || "";
+      const user = getUserById(req.userId!);
+      const email = user?.email || "";
+
+      const url = `${baseUrl}/api/shared/projects?secret=${encodeURIComponent(secret)}&email=${encodeURIComponent(email)}`;
+      const upstream = await fetch(url);
+      if (!upstream.ok) {
+        const text = await upstream.text();
+        return res.status(upstream.status).json({ error: `Upstream error: ${text}` });
+      }
+      const data = await upstream.json();
+      return res.json(data);
+    } catch (err: any) {
+      console.error("Import projects proxy error:", err);
+      return res.status(502).json({ error: `Could not reach source app: ${err.message}` });
+    }
+  });
+
+  // GET /api/import/items?source=characters&project=Polaris — proxy to sibling app's shared items
+  app.get("/api/import/items", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const source = req.query.source as string;
+      const project = req.query.project as string;
+      if (!source) return res.status(400).json({ error: "source query param required" });
+      if (!project) return res.status(400).json({ error: "project query param required" });
+
+      const SOURCES: Record<string, string> = {
+        characters: "https://character.littleredappleproductions.com",
+        locations: "https://location.littleredappleproductions.com",
+        props: "https://props.littleredappleproductions.com",
+      };
+      const ENDPOINTS: Record<string, string> = {
+        characters: "characters",
+        locations: "locations",
+        props: "props",
+      };
+      const baseUrl = SOURCES[source];
+      if (!baseUrl) return res.status(400).json({ error: `Unknown source: ${source}` });
+
+      const secret = process.env.FORGE_CROSS_APP_SECRET || "";
+      const user = getUserById(req.userId!);
+      const email = user?.email || "";
+      const endpoint = ENDPOINTS[source];
+
+      const url = `${baseUrl}/api/shared/${endpoint}?secret=${encodeURIComponent(secret)}&email=${encodeURIComponent(email)}&project=${encodeURIComponent(project)}`;
+      const upstream = await fetch(url);
+      if (!upstream.ok) {
+        const text = await upstream.text();
+        return res.status(upstream.status).json({ error: `Upstream error: ${text}` });
+      }
+      const data = await upstream.json();
+      return res.json(data);
+    } catch (err: any) {
+      console.error("Import items proxy error:", err);
+      return res.status(502).json({ error: `Could not reach source app: ${err.message}` });
+    }
+  });
+
+  // POST /api/import/save — merge imported assets into project state (frontend handles state; this is a passthrough ack)
+  app.post("/api/import/save", requireAuth, (req: Request, res: Response) => {
+    // The frontend manages importedAssets in React state and persists via the normal
+    // PUT /api/projects/:id save mechanism. This endpoint simply acknowledges the import.
+    const { items } = req.body;
+    if (!Array.isArray(items)) return res.status(400).json({ error: "items array required" });
+    return res.json({ ok: true, imported: items.length });
+  });
+
   // Export all developed scenes as combined DOCX
   app.post("/api/export-all-docx", async (req: Request, res: Response) => {
     try {

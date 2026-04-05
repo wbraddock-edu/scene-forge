@@ -63,7 +63,17 @@ import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
 import { DEMO_SCENES, DEMO_PROFILE } from "@/lib/demo-data";
 
-type Step = "auth" | "projects" | "account" | "upload" | "configure" | "dashboard" | "analyzing" | "expanded";
+type Step = "auth" | "projects" | "account" | "upload" | "configure" | "dashboard" | "analyzing" | "expanded" | "import";
+
+interface ImportedAsset {
+  source: "characters" | "locations" | "props";
+  sourceName: string; // "Character Forge", "Location Forge", "Props Forge"
+  name: string;       // e.g. "Captain Aria Voss"
+  projectName: string; // e.g. "Polaris"
+  profile: Record<string, any>; // full text profile
+  images: Record<string, string>; // { panelKey: base64string }
+  importedAt: string; // ISO timestamp
+}
 
 interface Provider {
   id: "openai" | "anthropic" | "google";
@@ -232,6 +242,21 @@ export default function Home() {
   const [midjourneyPrompt, setMidjourneyPrompt] = useState("");
   const [showMidjourneyDialog, setShowMidjourneyDialog] = useState(false);
 
+  // Imported assets
+  const [importedAssets, setImportedAssets] = useState<ImportedAsset[]>([]);
+
+  // Import panel state
+  const [importSubstep, setImportSubstep] = useState<1 | 2 | 3>(1);
+  const [importSource, setImportSource] = useState<{ id: string; name: string; url: string; icon: string } | null>(null);
+  const [importProjects, setImportProjects] = useState<string[]>([]);
+  const [importProjectsLoading, setImportProjectsLoading] = useState(false);
+  const [importSelectedProject, setImportSelectedProject] = useState<string | null>(null);
+  const [importItems, setImportItems] = useState<any[]>([]);
+  const [importItemsLoading, setImportItemsLoading] = useState(false);
+  const [importSelectedItems, setImportSelectedItems] = useState<Set<string>>(new Set());
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importRefLibOpen, setImportRefLibOpen] = useState(true);
+
   // Dashboard filters
   const [filterLength, setFilterLength] = useState<"all" | "short" | "medium" | "long">("all");
   const [sortBy, setSortBy] = useState<"number" | "name">("number");
@@ -307,6 +332,7 @@ export default function Home() {
         }
         if (state.developedScenes) setDevelopedScenes(state.developedScenes);
         if (state.referenceImages) setReferenceImages(state.referenceImages);
+        if (state.importedAssets) setImportedAssets(state.importedAssets);
       } else {
         setStep("upload");
       }
@@ -325,7 +351,7 @@ export default function Home() {
       const id = data.id || data.project?.id;
       // Reset workspace state for new project
       setManuscriptText(""); setSourceType("screenplay"); setDetectedScenes([]);
-      setDevelopedScenes({}); setReferenceImages([]); setStep("upload");
+      setDevelopedScenes({}); setReferenceImages([]); setImportedAssets([]); setStep("upload");
       setActiveProjectId(id);
       setActiveProjectName(name);
       setSessionLoaded(true);
@@ -367,6 +393,7 @@ export default function Home() {
             detectedScenes,
             developedScenes,
             referenceImages,
+            importedAssets,
           },
         });
       } catch { /* silent */ }
@@ -376,9 +403,9 @@ export default function Home() {
     setSessionLoaded(false);
     setStep("upload");
     setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({});
-    setReferenceImages([]);
+    setReferenceImages([]); setImportedAssets([]);
     loadProjectList();
-  }, [loadProjectList, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages]);
+  }, [loadProjectList, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
 
   // ── Auto-save to active project (debounced) ──
   const saveTimeout = useRef<any>(null);
@@ -397,11 +424,12 @@ export default function Home() {
             detectedScenes,
             developedScenes,
             referenceImages,
+            importedAssets,
           },
         });
       } catch { /* silent */ }
     }, 2000);
-  }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages]);
+  }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
 
   // ── Auth submit ──
   async function handleAuthSubmit(e: React.FormEvent) {
@@ -435,7 +463,7 @@ export default function Home() {
     if (activeProjectId) {
       try {
         await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
-          state: { manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages },
+          state: { manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets },
         });
       } catch { /* silent */ }
     }
@@ -446,7 +474,7 @@ export default function Home() {
     setActiveProjectName("");
     setSessionLoaded(false);
     setStep("upload");
-    setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({}); setReferenceImages([]);
+    setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({}); setReferenceImages([]); setImportedAssets([]);
   }
 
   // File upload handler
@@ -1251,6 +1279,299 @@ export default function Home() {
     );
   }
 
+  // ── IMPORT SCREEN ──
+  if (step === "import") {
+    const IMPORT_SOURCES = [
+      { id: "characters", name: "Character Forge", icon: Users, desc: "Characters with portraits and profiles" },
+      { id: "locations", name: "Location Forge", icon: MapPin, desc: "Locations with environment visuals" },
+      { id: "props", name: "Props Forge", icon: Box, desc: "Props with reference images" },
+    ];
+
+    const handleSelectSource = async (src: typeof IMPORT_SOURCES[0]) => {
+      setImportSource({ id: src.id, name: src.name, url: "", icon: src.id });
+      setImportSubstep(2);
+      setImportProjectsLoading(true);
+      setImportError(null);
+      try {
+        const res = await apiRequest("GET", `/api/import/projects?source=${src.id}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load projects");
+        // Accept { projects: string[] } or string[]
+        const projects: string[] = Array.isArray(data) ? data : (data.projects || []);
+        setImportProjects(projects);
+      } catch (err: any) {
+        setImportError(err.message);
+        setImportProjects([]);
+      }
+      setImportProjectsLoading(false);
+    };
+
+    const handleSelectProject = async (project: string) => {
+      setImportSelectedProject(project);
+      setImportSubstep(3);
+      setImportItemsLoading(true);
+      setImportError(null);
+      setImportSelectedItems(new Set());
+      try {
+        const res = await apiRequest("GET", `/api/import/items?source=${importSource!.id}&project=${encodeURIComponent(project)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load items");
+        // Accept { characters: [...] } or { locations: [...] } or { props: [...] } or array
+        let items: any[] = [];
+        if (Array.isArray(data)) {
+          items = data;
+        } else {
+          const key = importSource!.id; // "characters", "locations", "props"
+          items = data[key] || Object.values(data)[0] || [];
+        }
+        setImportItems(items);
+      } catch (err: any) {
+        setImportError(err.message);
+        setImportItems([]);
+      }
+      setImportItemsLoading(false);
+    };
+
+    const handleImportSelected = () => {
+      const toImport = importItems.filter((item) => importSelectedItems.has(item.name || item.id));
+      const sourceId = importSource!.id as "characters" | "locations" | "props";
+      const sourceName = importSource!.name;
+      const now = new Date().toISOString();
+
+      const newAssets: ImportedAsset[] = toImport.map((item) => ({
+        source: sourceId,
+        sourceName,
+        name: item.name || item.id || "Unknown",
+        projectName: importSelectedProject || "",
+        profile: item.profile || {},
+        images: item.images || {},
+        importedAt: now,
+      }));
+
+      // Extract first images and add to referenceImages (up to 6 total)
+      const newRefImages: string[] = [];
+      for (const asset of newAssets) {
+        const firstImg = Object.values(asset.images)[0] as string | undefined;
+        if (firstImg) newRefImages.push(firstImg);
+      }
+
+      setImportedAssets((prev) => [...prev, ...newAssets]);
+      setReferenceImages((prev) => [...prev, ...newRefImages].slice(0, 6));
+
+      toast({ title: "Assets imported", description: `${newAssets.length} asset${newAssets.length !== 1 ? "s" : ""} added to Reference Library.` });
+      setStep("dashboard");
+    };
+
+    return (
+      <div className="min-h-screen" style={{ background: "hsl(225,15%,4%)" }} data-testid="import-page">
+        {/* Header */}
+        <header className="h-12 flex items-center px-4 gap-3 shrink-0" style={{ borderBottom: "1px solid hsl(225,10%,12%)" }}>
+          <img src="./scene-forge-logo.png" alt="Scene Forge" className="w-7 h-7 rounded object-contain" />
+          <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>SCENE FORGE</span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded" style={{ background: "hsla(163,100%,42%,0.08)", border: "1px solid hsla(163,100%,42%,0.15)" }}>
+            <Download className="w-3 h-3" style={{ color: "hsl(163,100%,42%)" }} />
+            <span className="text-[9px] font-mono uppercase tracking-wider" style={{ color: "hsl(163,100%,42%)" }}>Import Assets</span>
+          </div>
+          <div className="flex-1" />
+          <button
+            onClick={() => setStep("dashboard")}
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors"
+            style={{ color: "hsl(220,5%,65%)", border: "1px solid hsl(225,10%,18%)" }}
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />Back to Dashboard
+          </button>
+        </header>
+
+        <main className="max-w-3xl mx-auto px-4 py-8">
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-2 mb-6 text-[11px] font-mono" style={{ color: "hsl(220,5%,52%)" }}>
+            <button
+              onClick={() => { setImportSubstep(1); setImportSource(null); setImportProjects([]); setImportSelectedProject(null); setImportItems([]); setImportSelectedItems(new Set()); setImportError(null); }}
+              className={importSubstep >= 1 ? "text-[#00d4aa]" : ""}
+            >Source</button>
+            {importSubstep >= 2 && <><span>/</span><button onClick={() => { setImportSubstep(2); setImportSelectedProject(null); setImportItems([]); setImportSelectedItems(new Set()); }} className={importSubstep >= 2 ? "text-[#00d4aa]" : ""}>{importSource?.name}</button></>}
+            {importSubstep >= 3 && <><span>/</span><span style={{ color: "hsl(0,0%,85%)" }}>{importSelectedProject}</span></>}
+          </div>
+
+          {/* Step 1: Source Selection */}
+          {importSubstep === 1 && (
+            <div>
+              <h2 className="text-base font-semibold mb-1" style={{ color: "hsl(0,0%,92%)" }}>Choose Import Source</h2>
+              <p className="text-xs mb-6" style={{ color: "hsl(220,5%,60%)" }}>Select a Forge module to import assets from.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {IMPORT_SOURCES.map((src) => {
+                  const Icon = src.icon;
+                  return (
+                    <button
+                      key={src.id}
+                      onClick={() => handleSelectSource(src)}
+                      className="rounded-xl p-5 text-left transition-all group"
+                      style={{ background: "hsl(225,15%,10%)", border: "1px solid hsl(225,10%,18%)" }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "hsl(163,100%,42%)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "hsl(225,10%,18%)"; }}
+                    >
+                      <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-3" style={{ background: "hsla(163,100%,42%,0.1)" }}>
+                        <Icon className="w-5 h-5" style={{ color: "hsl(163,100%,42%)" }} />
+                      </div>
+                      <h3 className="text-sm font-semibold mb-1" style={{ color: "hsl(0,0%,92%)" }}>{src.name}</h3>
+                      <p className="text-[11px]" style={{ color: "hsl(220,5%,58%)" }}>{src.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Project Selection */}
+          {importSubstep === 2 && (
+            <div>
+              <h2 className="text-base font-semibold mb-1" style={{ color: "hsl(0,0%,92%)" }}>Select Project</h2>
+              <p className="text-xs mb-6" style={{ color: "hsl(220,5%,60%)" }}>Choose a project from {importSource?.name} to browse its assets.</p>
+              {importError && (
+                <div className="rounded-lg p-4 mb-4 flex items-start gap-2" style={{ background: "hsla(0,72%,50%,0.08)", border: "1px solid hsla(0,72%,50%,0.2)" }}>
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "hsl(0,72%,65%)" }} />
+                  <div>
+                    <p className="text-xs font-semibold mb-0.5" style={{ color: "hsl(0,72%,65%)" }}>Could not connect to {importSource?.name}</p>
+                    <p className="text-[11px]" style={{ color: "hsl(220,5%,60%)" }}>{importError}</p>
+                  </div>
+                </div>
+              )}
+              {importProjectsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: "hsl(163,100%,42%)" }} />
+                </div>
+              ) : importProjects.length === 0 && !importError ? (
+                <div className="text-center py-16" style={{ color: "hsl(220,5%,52%)" }}>
+                  <p className="text-sm">No projects found in {importSource?.name}.</p>
+                  <p className="text-[11px] font-mono mt-1">Create a project there first, or check your account credentials.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {importProjects.map((proj) => (
+                    <button
+                      key={proj}
+                      onClick={() => handleSelectProject(proj)}
+                      className="w-full rounded-lg px-4 py-3 text-left flex items-center justify-between transition-all"
+                      style={{ background: "hsl(225,15%,10%)", border: "1px solid hsl(225,10%,18%)" }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "hsl(163,100%,42%)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "hsl(225,10%,18%)"; }}
+                    >
+                      <span className="text-sm font-medium" style={{ color: "hsl(0,0%,90%)" }}>{proj}</span>
+                      <ChevronRight className="w-4 h-4" style={{ color: "hsl(220,5%,50%)" }} />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 3: Item Selection */}
+          {importSubstep === 3 && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-base font-semibold" style={{ color: "hsl(0,0%,92%)" }}>Select Assets to Import</h2>
+                {importItems.length > 0 && (
+                  <button
+                    className="text-[11px] font-mono"
+                    style={{ color: "hsl(163,100%,42%)" }}
+                    onClick={() => {
+                      if (importSelectedItems.size === importItems.length) {
+                        setImportSelectedItems(new Set());
+                      } else {
+                        setImportSelectedItems(new Set(importItems.map((it) => it.name || it.id)));
+                      }
+                    }}
+                  >
+                    {importSelectedItems.size === importItems.length ? "Deselect All" : "Select All"}
+                  </button>
+                )}
+              </div>
+              <p className="text-xs mb-5" style={{ color: "hsl(220,5%,60%)" }}>
+                From <span style={{ color: "hsl(0,0%,85%)" }}>{importSelectedProject}</span> in {importSource?.name}
+              </p>
+              {importError && (
+                <div className="rounded-lg p-4 mb-4 flex items-start gap-2" style={{ background: "hsla(0,72%,50%,0.08)", border: "1px solid hsla(0,72%,50%,0.2)" }}>
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "hsl(0,72%,65%)" }} />
+                  <p className="text-xs" style={{ color: "hsl(0,72%,65%)" }}>{importError}</p>
+                </div>
+              )}
+              {importItemsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-5 h-5 animate-spin" style={{ color: "hsl(163,100%,42%)" }} />
+                </div>
+              ) : importItems.length === 0 && !importError ? (
+                <div className="text-center py-16" style={{ color: "hsl(220,5%,52%)" }}>
+                  <p className="text-sm">No assets found in this project.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {importItems.map((item) => {
+                    const itemKey = item.name || item.id || String(Math.random());
+                    const isSelected = importSelectedItems.has(itemKey);
+                    const firstImg = item.images ? (Object.values(item.images)[0] as string | undefined) : undefined;
+                    return (
+                      <button
+                        key={itemKey}
+                        onClick={() => {
+                          setImportSelectedItems((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(itemKey)) next.delete(itemKey); else next.add(itemKey);
+                            return next;
+                          });
+                        }}
+                        className="w-full rounded-lg px-4 py-3 flex items-center gap-3 transition-all"
+                        style={{
+                          background: isSelected ? "hsla(163,100%,42%,0.08)" : "hsl(225,15%,10%)",
+                          border: `1px solid ${isSelected ? "hsl(163,100%,42%)" : "hsl(225,10%,18%)"}`,
+                        }}
+                      >
+                        {/* Checkbox */}
+                        <div
+                          className="w-4 h-4 rounded shrink-0 flex items-center justify-center"
+                          style={{
+                            background: isSelected ? "hsl(163,100%,42%)" : "transparent",
+                            border: `1px solid ${isSelected ? "hsl(163,100%,42%)" : "hsl(225,10%,32%)"}`,
+                          }}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5" style={{ color: "black" }} />}
+                        </div>
+                        {/* Thumbnail */}
+                        <div className="w-10 h-10 rounded-md overflow-hidden shrink-0" style={{ background: "hsl(225,15%,16%)", border: "1px solid hsl(225,10%,22%)" }}>
+                          {firstImg ? (
+                            <img src={`data:image/png;base64,${firstImg}`} alt={item.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              {importSource?.id === "characters" ? <Users className="w-4 h-4" style={{ color: "hsl(220,5%,40%)" }} /> :
+                               importSource?.id === "locations" ? <MapPin className="w-4 h-4" style={{ color: "hsl(220,5%,40%)" }} /> :
+                               <Box className="w-4 h-4" style={{ color: "hsl(220,5%,40%)" }} />}
+                            </div>
+                          )}
+                        </div>
+                        {/* Name */}
+                        <span className="text-sm font-medium flex-1 text-left" style={{ color: "hsl(0,0%,90%)" }}>{item.name || itemKey}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {importSelectedItems.size > 0 && (
+                <div className="mt-6">
+                  <Button
+                    onClick={handleImportSelected}
+                    className="w-full gap-2 font-semibold bg-[#00d4aa] hover:bg-[#00d4aa]/90 text-black"
+                  >
+                    <Download className="w-4 h-4" />
+                    Import {importSelectedItems.size} Asset{importSelectedItems.size !== 1 ? "s" : ""}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   // ── EXPANDED VIEW ──
   if (step === "expanded" && expandedScene && developedScenes[expandedScene]) {
     const dev = developedScenes[expandedScene];
@@ -1554,6 +1875,13 @@ export default function Home() {
                 <Download className="w-3.5 h-3.5 mr-1" />{exportingDocx ? "Exporting..." : "Export All DOCX"}
               </Button>
             )}
+            <Button
+              variant="ghost" size="sm" className="text-xs gap-1"
+              onClick={() => { setImportSubstep(1); setImportSource(null); setImportProjects([]); setImportSelectedProject(null); setImportItems([]); setImportSelectedItems(new Set()); setImportError(null); setStep("import"); }}
+              data-testid="btn-import-assets"
+            >
+              <Download className="w-3.5 h-3.5" />Import Assets
+            </Button>
             <Button variant="ghost" size="sm" className="text-xs" onClick={() => setStep("upload")} data-testid="btn-new-scan">
               New Scan
             </Button>
@@ -1708,6 +2036,57 @@ export default function Home() {
             );
           })}
         </div>
+
+        {/* Reference Library */}
+        {importedAssets.length > 0 && (
+          <div className="mt-8 max-w-[1400px]">
+            <button
+              className="flex items-center gap-2 mb-3 w-full text-left"
+              onClick={() => setImportRefLibOpen((v) => !v)}
+            >
+              <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>Reference Library</span>
+              <span className="text-[10px] font-mono" style={{ color: "hsl(220,5%,52%)" }}>({importedAssets.length} asset{importedAssets.length !== 1 ? "s" : ""})</span>
+              <ChevronDown className="w-3.5 h-3.5 ml-1 transition-transform" style={{ color: "hsl(220,5%,52%)", transform: importRefLibOpen ? "rotate(0deg)" : "rotate(-90deg)" }} />
+            </button>
+            {importRefLibOpen && (
+              <div className="space-y-4">
+                {(["characters", "locations", "props"] as const).map((srcType) => {
+                  const group = importedAssets.filter((a) => a.source === srcType);
+                  if (group.length === 0) return null;
+                  const srcLabel = srcType === "characters" ? "Characters" : srcType === "locations" ? "Locations" : "Props";
+                  const SrcIcon = srcType === "characters" ? Users : srcType === "locations" ? MapPin : Box;
+                  return (
+                    <div key={srcType}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <SrcIcon className="w-3.5 h-3.5" style={{ color: "hsl(163,100%,42%)" }} />
+                        <span className="text-[11px] font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(220,5%,62%)" }}>{srcLabel}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-3">
+                        {group.map((asset, i) => {
+                          const firstImage = Object.values(asset.images)[0] as string | undefined;
+                          return (
+                            <div key={i} className="flex flex-col items-center gap-1" style={{ width: 72 }}>
+                              <div className="w-16 h-16 rounded-lg overflow-hidden border" style={{ borderColor: "hsl(225,10%,18%)", background: "hsl(225,15%,10%)" }}>
+                                {firstImage ? (
+                                  <img src={`data:image/png;base64,${firstImage}`} alt={asset.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <SrcIcon className="w-5 h-5" style={{ color: "hsl(220,5%,35%)" }} />
+                                  </div>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-mono text-center leading-tight line-clamp-2" style={{ color: "hsl(220,5%,75%)", maxWidth: 72 }}>{asset.name}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* FAQ Section */}
         <div className="mt-10 max-w-3xl mx-auto">
