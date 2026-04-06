@@ -1296,8 +1296,11 @@ export default function Home() {
         const res = await apiRequest("GET", `/api/import/projects?source=${src.id}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load projects");
-        // Accept { projects: string[] } or string[]
-        const projects: string[] = Array.isArray(data) ? data : (data.projects || []);
+        // Accept { projects: [{id, name}] }, { projects: string[] }, or string[]
+        const raw: any[] = Array.isArray(data) ? data : (data.projects || []);
+        const projects: string[] = raw.map((p: any) =>
+          typeof p === "string" ? p : (p?.name ?? String(p))
+        );
         setImportProjects(projects);
       } catch (err: any) {
         setImportError(err.message);
@@ -1349,10 +1352,14 @@ export default function Home() {
       }));
 
       // Extract first images and add to referenceImages (up to 6 total)
+      // Normalise to full data URI in case sibling apps return raw base64
       const newRefImages: string[] = [];
       for (const asset of newAssets) {
-        const firstImg = Object.values(asset.images)[0] as string | undefined;
-        if (firstImg) newRefImages.push(firstImg);
+        const rawImg = Object.values(asset.images)[0] as string | undefined;
+        if (rawImg) {
+          const uri = rawImg.startsWith("data:") ? rawImg : `data:image/png;base64,${rawImg}`;
+          newRefImages.push(uri);
+        }
       }
 
       setImportedAssets((prev) => [...prev, ...newAssets]);
@@ -1508,7 +1515,11 @@ export default function Home() {
                   {importItems.map((item) => {
                     const itemKey = item.name || item.id || String(Math.random());
                     const isSelected = importSelectedItems.has(itemKey);
-                    const firstImg = item.images ? (Object.values(item.images)[0] as string | undefined) : undefined;
+                    // images may be stored as full data URIs or raw base64 — normalise to full data URI
+                    const rawImg = item.images ? (Object.values(item.images)[0] as string | undefined) : undefined;
+                    const firstImg = rawImg
+                      ? (rawImg.startsWith("data:") ? rawImg : `data:image/png;base64,${rawImg}`)
+                      : undefined;
                     return (
                       <button
                         key={itemKey}
@@ -1538,7 +1549,7 @@ export default function Home() {
                         {/* Thumbnail */}
                         <div className="w-10 h-10 rounded-md overflow-hidden shrink-0" style={{ background: "hsl(225,15%,16%)", border: "1px solid hsl(225,10%,22%)" }}>
                           {firstImg ? (
-                            <img src={`data:image/png;base64,${firstImg}`} alt={item.name} className="w-full h-full object-cover" />
+                            <img src={firstImg} alt={item.name} className="w-full h-full object-cover" />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center">
                               {importSource?.id === "characters" ? <Users className="w-4 h-4" style={{ color: "hsl(220,5%,40%)" }} /> :
