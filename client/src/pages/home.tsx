@@ -2176,7 +2176,7 @@ export default function Home() {
               },
               {
                 name: "Story Forge",
-                url: "https://github.com/wbraddock-edu/story-forge",
+                url: "https://story-forge.littleredappleproductions.com",
                 icon: BookOpen,
                 desc: "AI-assisted story development and screenplay writing with structured narrative tools."
               },
