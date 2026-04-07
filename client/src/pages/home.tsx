@@ -849,7 +849,7 @@ export default function Home() {
             Your scenes and shot lists are stored securely per account.
           </p>
           <p className="text-xs text-center mt-4" style={{ color: "hsl(220,5%,30%)" }}>
-            Created with AI by{" "}
+            Created with the Assistance of AI &copy; 2026{" "}
             <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
               Little Red Apple Productions
             </a>{" "}
@@ -1056,10 +1056,10 @@ export default function Home() {
               {/* Footer */}
               <div className="py-8 mt-6 border-t" style={{ borderColor: "hsl(225,10%,12%)" }}>
                 <p className="text-xs text-center font-mono" style={{ color: "hsl(220,5%,30%)" }}>
-                  Created with AI &copy; 2026{" "}
-                  <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
-                    Little Red Apple Productions
-                  </a>
+                  Created with the Assistance of AI &copy; 2026{" "}
+            <a href="https://littleredappleproductions.com" target="_blank" rel="noopener" className="text-[#00d4aa]/60 hover:text-[#00d4aa]">
+              Little Red Apple Productions
+            </a>
                 </p>
               </div>
             </div>
