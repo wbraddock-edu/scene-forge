@@ -191,12 +191,14 @@ interface ShotPromptEntry {
   prompt: string;
 }
 
-/** Parse visualShotPrompts JSON string into panel definitions */
+/** Parse visualShotPrompts into panel definitions.
+ *  Handles both a JSON-encoded string (schema contract) and a raw array
+ *  (what the AI often actually produces after the outer JSON.parse). */
 function parseShotPrompts(profile: SceneProfile): { key: string; label: string; sublabel: string; prompt: string }[] | null {
   const raw = (profile as any).visualShotPrompts;
-  if (!raw || typeof raw !== "string") return null;
+  if (!raw) return null;
   try {
-    const entries: ShotPromptEntry[] = JSON.parse(raw);
+    const entries: ShotPromptEntry[] = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (!Array.isArray(entries) || entries.length === 0) return null;
     return entries.map((e) => ({
       key: `shot_${e.shotNumber}`,

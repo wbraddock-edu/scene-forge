@@ -514,7 +514,10 @@ function buildDocx(profile: SceneProfile, imageBuffers?: Record<string, Buffer>)
     // Add dynamic shot panel labels from visualShotPrompts if present
     if (profile.visualShotPrompts) {
       try {
-        const shotPrompts = JSON.parse(profile.visualShotPrompts) as Array<{ shotNumber: number; label: string }>;
+        const shotPrompts: Array<{ shotNumber: number; label: string }> =
+          typeof profile.visualShotPrompts === "string"
+            ? JSON.parse(profile.visualShotPrompts)
+            : profile.visualShotPrompts;
         for (const sp of shotPrompts) {
           panelLabels[`shot_${sp.shotNumber}`] = `${sp.shotNumber}. ${sp.label}`;
         }
@@ -993,6 +996,12 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       profile.sceneName = sceneName;
       profile.sceneNumber = sceneNumber;
 
+      // Normalize visualShotPrompts: AI often returns a native array instead of a
+      // JSON-encoded string.  The schema expects a string, so stringify if needed.
+      if (Array.isArray((profile as any).visualShotPrompts)) {
+        (profile as any).visualShotPrompts = JSON.stringify((profile as any).visualShotPrompts);
+      }
+
       // Save to database
       const visitorId = req.headers["x-visitor-id"] as string || "anonymous";
       const saved = storage.createScene({
@@ -1280,7 +1289,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
           const panelLabels2: Record<string, string> = { ...VISUAL_PANEL_NAMES };
           if (profile.visualShotPrompts) {
             try {
-              const shotPrompts = JSON.parse(profile.visualShotPrompts) as Array<{ shotNumber: number; label: string }>;
+              const shotPrompts: Array<{ shotNumber: number; label: string }> =
+                typeof profile.visualShotPrompts === "string"
+                  ? JSON.parse(profile.visualShotPrompts)
+                  : profile.visualShotPrompts;
               for (const sp of shotPrompts) {
                 panelLabels2[`shot_${sp.shotNumber}`] = `${sp.shotNumber}. ${sp.label}`;
               }
