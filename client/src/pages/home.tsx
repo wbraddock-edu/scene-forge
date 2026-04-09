@@ -58,6 +58,7 @@ import {
   Crown,
   Zap,
   CreditCard,
+  RotateCcw,
 } from "lucide-react";
 import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
@@ -226,6 +227,7 @@ export default function Home() {
   const [detectedScenes, setDetectedScenes] = useState<DetectedScene[]>([]);
   const [developedScenes, setDevelopedScenes] = useState<Record<string, DevelopedItem>>({});
   const [expandedScene, setExpandedScene] = useState<string | null>(null);
+  const [failedScenes, setFailedScenes] = useState<Record<string, string>>({}); // sceneNumber → error message
 
   // Loading
   const [scanning, setScanning] = useState(false);
@@ -264,6 +266,7 @@ export default function Home() {
   const currentProvider = PROVIDERS.find((p) => p.id === provider)!;
   const imageProvider = provider === "anthropic" ? "openai" : provider;
   const developedCount = Object.keys(developedScenes).length;
+  const failedCount = Object.keys(failedScenes).length;
 
   // ── Check auth on mount ──
   useEffect(() => {
@@ -559,6 +562,12 @@ export default function Home() {
   // Develop a single scene
   const developScene = useCallback(async (scene: DetectedScene) => {
     setAnalyzingScene(scene.sceneNumber);
+    // Clear any previous failure for this scene
+    setFailedScenes((prev) => {
+      const next = { ...prev };
+      delete next[scene.sceneNumber];
+      return next;
+    });
     try {
       const res = await apiRequest("POST", "/api/analyze", {
         text: manuscriptText,
@@ -579,29 +588,43 @@ export default function Home() {
       }));
       toast({ title: "Scene developed", description: `Scene ${scene.sceneNumber}: ${scene.sceneName}` });
     } catch (err: any) {
+      setFailedScenes((prev) => ({ ...prev, [scene.sceneNumber]: err.message }));
       toast({ title: "Development failed", description: err.message, variant: "destructive" });
     } finally {
       setAnalyzingScene(null);
     }
   }, [manuscriptText, sourceType, provider, apiKey, toast]);
 
-  // Develop all scenes
+  // Develop all scenes — staggered with 3s delay between requests
   const developAll = useCallback(async () => {
     setDevelopingAll(true);
+    setFailedScenes({});
     const undeveloped = detectedScenes.filter((s) => !developedScenes[s.sceneNumber]);
-    for (const scene of undeveloped) {
-      try {
-        await developScene(scene);
-        if (undeveloped.indexOf(scene) < undeveloped.length - 1) {
-          await new Promise((r) => setTimeout(r, 5000));
-        }
-      } catch {
-        await new Promise((r) => setTimeout(r, 5000));
-        try { await developScene(scene); } catch { /* Skip */ }
+    for (let i = 0; i < undeveloped.length; i++) {
+      const scene = undeveloped[i];
+      await developScene(scene);
+      // Stagger: wait 3 seconds between requests to avoid rate limiting
+      if (i < undeveloped.length - 1) {
+        await new Promise((r) => setTimeout(r, 3000));
       }
     }
     setDevelopingAll(false);
   }, [detectedScenes, developedScenes, developScene]);
+
+  // Retry only the failed scenes
+  const retryFailed = useCallback(async () => {
+    setDevelopingAll(true);
+    const failedIds = Object.keys(failedScenes);
+    const toRetry = detectedScenes.filter((s) => failedIds.includes(s.sceneNumber));
+    for (let i = 0; i < toRetry.length; i++) {
+      const scene = toRetry[i];
+      await developScene(scene);
+      if (i < toRetry.length - 1) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    setDevelopingAll(false);
+  }, [detectedScenes, failedScenes, developScene]);
 
   // Generate image
   const generateImage = useCallback(async (panelKey: string, prompt: string) => {
@@ -1964,6 +1987,17 @@ export default function Home() {
                 <><PlayCircle className="w-3.5 h-3.5 mr-1" />Develop All</>
               )}
             </Button>
+            {failedCount > 0 && !developingAll && (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="text-xs"
+                onClick={retryFailed}
+                data-testid="btn-retry-failed"
+              >
+                <RotateCcw className="w-3.5 h-3.5 mr-1" />Retry {failedCount} Failed
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -1973,13 +2007,14 @@ export default function Home() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3" data-testid="scene-grid">
           {filteredScenes.map((scene) => {
             const isDeveloped = !!developedScenes[scene.sceneNumber];
+            const isFailed = !!failedScenes[scene.sceneNumber];
             const isAnalyzing = analyzingScene === scene.sceneNumber;
             const lengthColor = scene.estimatedLength === "long" ? "text-orange-400" : scene.estimatedLength === "medium" ? "text-yellow-400" : "text-green-400";
 
             return (
               <Card
                 key={scene.sceneNumber}
-                className={`bg-card border-border hover:border-primary/30 transition-colors ${isDeveloped ? "card-developed" : ""}`}
+                className={`bg-card border-border hover:border-primary/30 transition-colors ${isDeveloped ? "card-developed" : ""} ${isFailed ? "border-destructive/50" : ""}`}
                 data-testid={`card-scene-${scene.sceneNumber}`}
               >
                 <CardContent className="p-3 space-y-2">
@@ -1988,8 +2023,8 @@ export default function Home() {
                       <span className="font-mono text-xs font-bold text-primary" data-testid={`text-scene-num-${scene.sceneNumber}`}>
                         #{scene.sceneNumber}
                       </span>
-                      <Badge variant={isDeveloped ? "default" : "secondary"} className="text-[10px]" data-testid={`badge-status-${scene.sceneNumber}`}>
-                        {isDeveloped ? <><CheckCircle2 className="w-3 h-3 mr-0.5" />Developed</> : "Pending"}
+                      <Badge variant={isDeveloped ? "default" : isFailed ? "destructive" : "secondary"} className="text-[10px]" data-testid={`badge-status-${scene.sceneNumber}`}>
+                        {isDeveloped ? <><CheckCircle2 className="w-3 h-3 mr-0.5" />Developed</> : isFailed ? <><AlertCircle className="w-3 h-3 mr-0.5" />Failed</> : "Pending"}
                       </Badge>
                     </div>
                     <span className={`text-[10px] font-mono ${lengthColor}`} data-testid={`badge-length-${scene.sceneNumber}`}>
@@ -2015,6 +2050,10 @@ export default function Home() {
 
                   <p className="text-[11px] text-muted-foreground/80 line-clamp-2">{scene.briefSummary}</p>
 
+                  {isFailed && (
+                    <p className="text-[10px] text-destructive line-clamp-2">{failedScenes[scene.sceneNumber]}</p>
+                  )}
+
                   <div className="pt-1">
                     {isDeveloped ? (
                       <Button
@@ -2029,6 +2068,7 @@ export default function Home() {
                     ) : (
                       <Button
                         size="sm"
+                        variant={isFailed ? "destructive" : "default"}
                         className="w-full text-xs"
                         onClick={() => developScene(scene)}
                         disabled={isAnalyzing || developingAll}
@@ -2036,6 +2076,8 @@ export default function Home() {
                       >
                         {isAnalyzing ? (
                           <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Developing...</>
+                        ) : isFailed ? (
+                          <><RotateCcw className="w-3.5 h-3.5 mr-1" />Retry</>
                         ) : (
                           <><Sparkles className="w-3.5 h-3.5 mr-1" />Develop</>
                         )}

@@ -64,7 +64,28 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
 
 // ── AI Provider Abstraction ──
 
-async function callTextAI(
+/** Sleep helper for retry backoff */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Determine if an error is retryable (rate limit, server error, blocked response) */
+function isRetryableError(err: any): boolean {
+  const msg = String(err?.message || "");
+  return (
+    msg.includes("429") ||
+    msg.includes("500") ||
+    msg.includes("503") ||
+    msg.includes("rate") ||
+    msg.includes("empty response") ||
+    msg.includes("blocked") ||
+    msg.includes("SAFETY") ||
+    msg.includes("no candidates")
+  );
+}
+
+/** Single attempt to call a text AI provider (no retries) */
+async function callTextAISingle(
   provider: string,
   apiKey: string,
   systemPrompt: string,
@@ -130,6 +151,12 @@ async function callTextAI(
             maxOutputTokens: 16384,
             responseMimeType: "application/json",
           },
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_ONLY_HIGH" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" },
+          ],
         }),
       }
     );
@@ -138,13 +165,69 @@ async function callTextAI(
       throw new Error(`Google AI API error: ${res.status} - ${err}`);
     }
     const data = await res.json();
-    // Null-safe: check candidates exist
-    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-      throw new Error("Google AI returned empty response — no candidates found");
+
+    // Check for blocked content via promptFeedback
+    if (data.promptFeedback?.blockReason) {
+      throw new Error(
+        `Google AI blocked the request (${data.promptFeedback.blockReason}). ` +
+        `This scene may contain content that triggers safety filters. Try rephrasing or using a different provider.`
+      );
     }
+
+    // Check candidates exist
+    if (!data.candidates || !data.candidates[0]) {
+      throw new Error("Google AI returned empty response — no candidates found. The request may have been blocked by content filters.");
+    }
+
+    // Check for finish reason indicating safety block
+    const finishReason = data.candidates[0].finishReason;
+    if (finishReason === "SAFETY") {
+      throw new Error(
+        "Google AI blocked this scene due to safety filters. " +
+        "Scenes with conflict or crisis content may trigger this. Try a different AI provider for this scene."
+      );
+    }
+
+    if (!data.candidates[0].content) {
+      throw new Error(
+        `Google AI returned no content (finishReason: ${finishReason || "unknown"}). ` +
+        `The response may have been filtered. Try again or use a different provider.`
+      );
+    }
+
     return data.candidates[0].content.parts[0].text;
   }
   throw new Error(`Unknown provider: ${provider}`);
+}
+
+/** Call text AI with retry logic (3 attempts, exponential backoff starting at 2s) */
+async function callTextAI(
+  provider: string,
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<string> {
+  const maxRetries = 3;
+  const baseDelay = 2000;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await callTextAISingle(provider, apiKey, systemPrompt, userPrompt);
+    } catch (err: any) {
+      const isLast = attempt === maxRetries;
+      const retryable = isRetryableError(err);
+
+      if (isLast || !retryable) {
+        throw err;
+      }
+
+      const delay = baseDelay * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+      console.warn(`callTextAI attempt ${attempt} failed (retryable), retrying in ${delay}ms:`, err.message);
+      await sleep(delay);
+    }
+  }
+
+  throw new Error("callTextAI: unexpected code path");
 }
 
 async function callImageAI(
@@ -904,7 +987,36 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       return res.json({ profile, sceneId: saved.id });
     } catch (err: any) {
       console.error("Analyze error:", err);
-      return res.status(422).json({ error: err.message });
+
+      const reqSceneName = req.body?.sceneName || "unknown";
+      const reqSceneNumber = req.body?.sceneNumber || "?";
+
+      // Classify the error for the frontend
+      const msg = String(err?.message || "Unknown error");
+      let userMessage: string;
+      let errorCode: string;
+
+      if (msg.includes("blocked") || msg.includes("SAFETY") || msg.includes("safety filters")) {
+        userMessage = `Scene "${reqSceneName}" was blocked by the AI provider's safety filters. Try a different provider for this scene.`;
+        errorCode = "CONTENT_BLOCKED";
+      } else if (msg.includes("429") || msg.includes("rate")) {
+        userMessage = "Rate limit exceeded. Too many requests — please wait a moment and try again.";
+        errorCode = "RATE_LIMITED";
+      } else if (msg.includes("empty response") || msg.includes("no candidates")) {
+        userMessage = `The AI returned an empty response for scene "${reqSceneName}". This may be a temporary issue — please retry.`;
+        errorCode = "EMPTY_RESPONSE";
+      } else if (msg.includes("API error: 5")) {
+        userMessage = "The AI service is temporarily unavailable. Please try again in a moment.";
+        errorCode = "SERVER_ERROR";
+      } else if (msg.includes("Failed to parse")) {
+        userMessage = "The AI returned an unexpected format. Please try again.";
+        errorCode = "PARSE_ERROR";
+      } else {
+        userMessage = msg;
+        errorCode = "UNKNOWN";
+      }
+
+      return res.status(422).json({ error: userMessage, errorCode, sceneName: reqSceneName, sceneNumber: reqSceneNumber });
     }
   });
 
