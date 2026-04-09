@@ -1696,6 +1696,18 @@ export default function Home() {
               )}
             </div>
             <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-muted-foreground hover:text-primary"
+                onClick={() => { if (sceneData) developScene(sceneData); }}
+                disabled={analyzingScene === expandedScene || developingAll}
+                title="Re-develop scene with latest AI analysis"
+                data-testid="btn-redevelop-expanded"
+              >
+                {analyzingScene === expandedScene ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
+                Re-develop
+              </Button>
               <Button variant="secondary" size="sm" className="text-xs" onClick={() => exportDocx(expandedScene)} disabled={exportingDocx} data-testid="btn-export-scene">
                 <Download className="w-3.5 h-3.5 mr-1" />{exportingDocx ? "Exporting..." : "Export DOCX"}
               </Button>
@@ -1780,6 +1792,29 @@ export default function Home() {
                   <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={() => setReferenceImages([])} data-testid="btn-clear-refs">Clear</Button>
                 )}
               </div>
+
+              {/* Info banner for scenes developed before dynamic panels */}
+              {!parseShotPrompts(profile) && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3" data-testid="banner-legacy-panels">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                      This scene was developed before dynamic shot panels were available. Re-develop the scene to generate panels matching your shot list.
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-[11px] mt-1.5 h-6 px-2 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                      onClick={() => { if (sceneData) developScene(sceneData); }}
+                      disabled={analyzingScene === expandedScene || developingAll}
+                      data-testid="btn-redevelop-banner"
+                    >
+                      {analyzingScene === expandedScene ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RotateCcw className="w-3 h-3 mr-1" />}
+                      Re-develop Scene
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {/* Dynamic panels from shot list, or legacy fallback */}
               {(() => {
@@ -2128,15 +2163,28 @@ export default function Home() {
 
                   <div className="pt-1">
                     {isDeveloped ? (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="w-full text-xs"
-                        onClick={() => { setExpandedScene(scene.sceneNumber); setStep("expanded"); }}
-                        data-testid={`btn-view-${scene.sceneNumber}`}
-                      >
-                        <Eye className="w-3.5 h-3.5 mr-1" />View Profile
-                      </Button>
+                      <div className="flex gap-1.5">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="flex-1 text-xs"
+                          onClick={() => { setExpandedScene(scene.sceneNumber); setStep("expanded"); }}
+                          data-testid={`btn-view-${scene.sceneNumber}`}
+                        >
+                          <Eye className="w-3.5 h-3.5 mr-1" />View Profile
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs px-2 text-muted-foreground hover:text-primary"
+                          onClick={() => developScene(scene)}
+                          disabled={isAnalyzing || developingAll}
+                          title="Re-develop scene with latest AI analysis"
+                          data-testid={`btn-redevelop-${scene.sceneNumber}`}
+                        >
+                          {isAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                        </Button>
+                      </div>
                     ) : (
                       <Button
                         size="sm"
