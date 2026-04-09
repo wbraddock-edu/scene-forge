@@ -1002,6 +1002,51 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         (profile as any).visualShotPrompts = JSON.stringify((profile as any).visualShotPrompts);
       }
 
+      // ── Second AI call: dedicated visual shot prompt generation ──
+      // The main analysis often truncates or skips visualShotPrompts because it's
+      // the last and most complex field in a 50+ field JSON response. This dedicated
+      // call is far more reliable.
+      if (profile.shotListDetailed) {
+        try {
+          const shotPromptSystemPrompt = `You are a film storyboard artist. Given the following shot list and scene context, generate a JSON array with one entry per shot. Each entry must have:
+- "shotNumber": integer (starting at 1)
+- "label": short label like "WIDE — Establishing the courtroom" (shot type + brief description, max 40 chars)
+- "sublabel": "Shot #N" where N is the shot number
+- "prompt": a detailed AI image generation prompt for this specific shot — describe the exact frame: location, characters, lighting, composition, camera angle, mood. Be vivid and specific.
+
+Return ONLY a valid JSON array. No markdown, no explanation, no wrapping.`;
+
+          const shotPromptUserPrompt = `Scene: "${sceneName}" (Scene #${sceneNumber})
+Location: ${profile.location || "unspecified"}
+Time of Day: ${profile.timeOfDay || "unspecified"}
+Mood: ${profile.mood || "unspecified"}
+Lighting: ${profile.lightingSetup || "unspecified"}
+
+Shot List:
+${profile.shotListDetailed}`;
+
+          const shotPromptResult = await callTextAI(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt);
+
+          // Parse the JSON array from the response
+          let cleaned = shotPromptResult.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+          const firstBracket = cleaned.indexOf("[");
+          const lastBracket = cleaned.lastIndexOf("]");
+          if (firstBracket !== -1 && lastBracket !== -1 && firstBracket < lastBracket) {
+            cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+          }
+
+          const shotPromptsArray = JSON.parse(cleaned);
+          if (Array.isArray(shotPromptsArray) && shotPromptsArray.length > 0) {
+            (profile as any).visualShotPrompts = JSON.stringify(shotPromptsArray);
+            console.log(`[visual-shot-prompts] Generated ${shotPromptsArray.length} shot prompts for scene "${sceneName}" (#${sceneNumber})`);
+          } else {
+            console.warn(`[visual-shot-prompts] Second AI call returned empty/non-array for scene "${sceneName}" — falling back`);
+          }
+        } catch (shotPromptErr: any) {
+          console.warn(`[visual-shot-prompts] Second AI call failed for scene "${sceneName}": ${shotPromptErr.message} — visual study will use legacy fallback`);
+        }
+      }
+
       // Save to database
       const visitorId = req.headers["x-visitor-id"] as string || "anonymous";
       const saved = storage.createScene({
