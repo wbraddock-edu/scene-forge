@@ -1094,6 +1094,83 @@ ${profile.shotListDetailed}`;
     }
   });
 
+  // Refresh all shot panels — runs ONLY the second AI call against existing shotListDetailed
+  app.post("/api/refresh-shot-panels", async (req: Request, res: Response) => {
+    try {
+      const { shotListDetailed, sceneName, sceneNumber, location, timeOfDay, mood, lightingSetup, provider, apiKey } = req.body;
+      if (!shotListDetailed || !sceneName || !provider || !apiKey) {
+        return res.status(400).json({ error: "Missing required fields: shotListDetailed, sceneName, provider, apiKey" });
+      }
+
+      const shotPromptSystemPrompt = `You are a film storyboard artist. Given the following shot list and scene context, generate a JSON array with one entry per shot. Each entry must have:
+- "shotNumber": integer (starting at 1)
+- "label": short label like "WIDE — Establishing the courtroom" (shot type + brief description, max 40 chars)
+- "sublabel": "Shot #N" where N is the shot number
+- "prompt": a detailed AI image generation prompt for this specific shot — describe the exact frame: location, characters, lighting, composition, camera angle, mood. Be vivid and specific.
+
+Return ONLY a valid JSON array. No markdown, no explanation, no wrapping.`;
+
+      const shotPromptUserPrompt = `Scene: "${sceneName}" (Scene #${sceneNumber || "?"})
+Location: ${location || "unspecified"}
+Time of Day: ${timeOfDay || "unspecified"}
+Mood: ${mood || "unspecified"}
+Lighting: ${lightingSetup || "unspecified"}
+
+Shot List:
+${shotListDetailed}`;
+
+      const shotPromptResult = await callTextAI(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt);
+
+      let cleaned = shotPromptResult.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
+      const firstBracket = cleaned.indexOf("[");
+      const lastBracket = cleaned.lastIndexOf("]");
+      if (firstBracket !== -1 && lastBracket !== -1 && firstBracket < lastBracket) {
+        cleaned = cleaned.substring(firstBracket, lastBracket + 1);
+      }
+
+      const shotPromptsArray = JSON.parse(cleaned);
+      if (!Array.isArray(shotPromptsArray) || shotPromptsArray.length === 0) {
+        return res.status(422).json({ error: "AI returned empty or invalid shot prompts array" });
+      }
+
+      console.log(`[refresh-shot-panels] Generated ${shotPromptsArray.length} shot prompts for scene "${sceneName}"`);
+      return res.json({ visualShotPrompts: JSON.stringify(shotPromptsArray) });
+    } catch (err: any) {
+      console.error("Refresh shot panels error:", err);
+      return res.status(422).json({ error: err.message });
+    }
+  });
+
+  // Refresh a single shot's image prompt
+  app.post("/api/refresh-single-shot-prompt", async (req: Request, res: Response) => {
+    try {
+      const { shotDescription, sceneName, location, timeOfDay, mood, lightingSetup, provider, apiKey } = req.body;
+      if (!shotDescription || !sceneName || !provider || !apiKey) {
+        return res.status(400).json({ error: "Missing required fields: shotDescription, sceneName, provider, apiKey" });
+      }
+
+      const systemPrompt = `You are a film storyboard artist. Given a single shot description and scene context, generate a detailed AI image generation prompt for this specific shot. Describe the exact frame: location, characters, lighting, composition, camera angle, mood. Be vivid and specific. Return ONLY the prompt text — no JSON, no markdown, no explanation.`;
+
+      const userPrompt = `Scene: "${sceneName}"
+Location: ${location || "unspecified"}
+Time of Day: ${timeOfDay || "unspecified"}
+Mood: ${mood || "unspecified"}
+Lighting: ${lightingSetup || "unspecified"}
+
+Shot to visualize:
+${shotDescription}`;
+
+      const result = await callTextAI(provider, apiKey, systemPrompt, userPrompt);
+      const prompt = result.trim();
+
+      console.log(`[refresh-single-shot-prompt] Generated prompt for scene "${sceneName}": ${prompt.substring(0, 80)}...`);
+      return res.json({ prompt });
+    } catch (err: any) {
+      console.error("Refresh single shot prompt error:", err);
+      return res.status(422).json({ error: err.message });
+    }
+  });
+
   // Generate scene visual
   app.post("/api/generate-image", async (req: Request, res: Response) => {
     try {

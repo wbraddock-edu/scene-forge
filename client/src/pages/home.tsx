@@ -59,6 +59,7 @@ import {
   Zap,
   CreditCard,
   RotateCcw,
+  RefreshCw,
 } from "lucide-react";
 import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
@@ -264,6 +265,8 @@ export default function Home() {
   const [generatingImage, setGeneratingImage] = useState<string | null>(null);
   const [generatingAll, setGeneratingAll] = useState(false);
   const [exportingDocx, setExportingDocx] = useState(false);
+  const [refreshingPanels, setRefreshingPanels] = useState(false);
+  const [refreshingShotPrompt, setRefreshingShotPrompt] = useState<string | null>(null);
 
   // Visual study
   const [selectedStyle, setSelectedStyle] = useState(ART_STYLES[0].id);
@@ -712,6 +715,103 @@ export default function Home() {
     }
     setGeneratingAll(false);
   }, [expandedScene, developedScenes, generateImage]);
+
+  // Refresh all shot panels — runs only the second AI call against existing shotListDetailed
+  const refreshShotPanels = useCallback(async () => {
+    if (!expandedScene || !developedScenes[expandedScene]) return;
+    setRefreshingPanels(true);
+    try {
+      const profile = developedScenes[expandedScene].profile;
+      const res = await apiRequest("POST", "/api/refresh-shot-panels", {
+        shotListDetailed: profile.shotListDetailed,
+        sceneName: profile.sceneName,
+        sceneNumber: profile.sceneNumber,
+        location: profile.location,
+        timeOfDay: profile.timeOfDay,
+        mood: profile.mood,
+        lightingSetup: profile.lightingSetup,
+        provider,
+        apiKey,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      // Parse new panels to determine which keys still match
+      const newPanels: { shotNumber: number }[] = JSON.parse(data.visualShotPrompts);
+      const newKeys = new Set(newPanels.map((p) => `shot_${p.shotNumber}`));
+      const oldImages = developedScenes[expandedScene].images;
+      const preservedImages: Record<string, string> = {};
+      for (const [key, val] of Object.entries(oldImages)) {
+        if (newKeys.has(key) || key === "customScene") {
+          preservedImages[key] = val;
+        }
+      }
+
+      setDevelopedScenes((prev) => ({
+        ...prev,
+        [expandedScene]: {
+          ...prev[expandedScene],
+          profile: { ...prev[expandedScene].profile, visualShotPrompts: data.visualShotPrompts },
+          images: preservedImages,
+        },
+      }));
+      toast({ title: "Panels refreshed", description: `Updated ${newPanels.length} shot panels` });
+    } catch (err: any) {
+      toast({ title: "Panel refresh failed", description: err.message, variant: "destructive" });
+    } finally {
+      setRefreshingPanels(false);
+    }
+  }, [expandedScene, developedScenes, provider, apiKey, toast]);
+
+  // Refresh a single shot's image prompt
+  const refreshSingleShotPrompt = useCallback(async (shotNumber: number) => {
+    if (!expandedScene || !developedScenes[expandedScene]) return;
+    const panelKey = `shot_${shotNumber}`;
+    setRefreshingShotPrompt(panelKey);
+    try {
+      const profile = developedScenes[expandedScene].profile;
+      // Extract the specific shot description from shotListDetailed
+      const lines = (profile.shotListDetailed || "").split("\n");
+      const shotLine = lines.find((l: string) => {
+        const match = l.match(/^\s*(\d+)/);
+        return match && parseInt(match[1]) === shotNumber;
+      });
+      const shotDescription = shotLine || `Shot #${shotNumber}`;
+
+      const res = await apiRequest("POST", "/api/refresh-single-shot-prompt", {
+        shotDescription,
+        sceneName: profile.sceneName,
+        location: profile.location,
+        timeOfDay: profile.timeOfDay,
+        mood: profile.mood,
+        lightingSetup: profile.lightingSetup,
+        provider,
+        apiKey,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      // Update just this shot's prompt in visualShotPrompts
+      const raw = (profile as any).visualShotPrompts;
+      const entries = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const updated = entries.map((e: any) =>
+        e.shotNumber === shotNumber ? { ...e, prompt: data.prompt } : e
+      );
+
+      setDevelopedScenes((prev) => ({
+        ...prev,
+        [expandedScene]: {
+          ...prev[expandedScene],
+          profile: { ...prev[expandedScene].profile, visualShotPrompts: JSON.stringify(updated) },
+        },
+      }));
+      toast({ title: "Prompt refreshed", description: `Updated prompt for Shot #${shotNumber}` });
+    } catch (err: any) {
+      toast({ title: "Prompt refresh failed", description: err.message, variant: "destructive" });
+    } finally {
+      setRefreshingShotPrompt(null);
+    }
+  }, [expandedScene, developedScenes, provider, apiKey, toast]);
 
   // Download single image
   const downloadImage = useCallback((base64: string, filename: string) => {
@@ -1844,20 +1944,35 @@ export default function Home() {
 
                 return (
                   <>
-                    {/* Generate all */}
-                    <Button
-                      size="sm"
-                      onClick={generateAllImages}
-                      disabled={generatingAll || generatingImage !== null}
-                      className="w-full text-xs"
-                      data-testid="btn-generate-all"
-                    >
-                      {generatingAll ? (
-                        <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating all panels...</>
-                      ) : (
-                        <><PlayCircle className="w-3.5 h-3.5 mr-1" />Generate All ({panelCount} panels)</>
+                    {/* Generate all + Refresh panels */}
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={generateAllImages}
+                        disabled={generatingAll || generatingImage !== null}
+                        className="flex-1 text-xs"
+                        data-testid="btn-generate-all"
+                      >
+                        {generatingAll ? (
+                          <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating all panels...</>
+                        ) : (
+                          <><PlayCircle className="w-3.5 h-3.5 mr-1" />Generate All ({panelCount} panels)</>
+                        )}
+                      </Button>
+                      {hasDynamic && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs text-muted-foreground hover:text-primary"
+                          onClick={refreshShotPanels}
+                          disabled={refreshingPanels || generatingAll || generatingImage !== null}
+                          title="Refresh panel definitions from current shot list (lightweight — does not re-analyze scene)"
+                          data-testid="btn-refresh-panels"
+                        >
+                          {refreshingPanels ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                        </Button>
                       )}
-                    </Button>
+                    </div>
 
                     {/* Visual grid */}
                     <div className="grid grid-cols-2 gap-3" data-testid="visual-grid">
@@ -1946,17 +2061,37 @@ export default function Home() {
                               )}
                             </div>
 
-                            {/* Midjourney prompt copy */}
-                            {prompt && !isCustom && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="absolute top-1 right-1 h-6 px-1.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity bg-background/80"
-                                onClick={() => { setMidjourneyPrompt(prompt); setShowMidjourneyDialog(true); }}
-                                data-testid={`btn-midjourney-${panel.key}`}
-                              >
-                                <Copy className="w-3 h-3 mr-0.5" />MJ
-                              </Button>
+                            {/* Hover action buttons */}
+                            {!isCustom && (
+                              <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                {panel.key.startsWith("shot_") && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-1.5 text-[10px] bg-background/80"
+                                    onClick={() => {
+                                      const num = parseInt(panel.key.replace("shot_", ""));
+                                      if (!isNaN(num)) refreshSingleShotPrompt(num);
+                                    }}
+                                    disabled={refreshingShotPrompt === panel.key}
+                                    title="Refresh this shot's image prompt"
+                                    data-testid={`btn-refresh-prompt-${panel.key}`}
+                                  >
+                                    {refreshingShotPrompt === panel.key ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                                  </Button>
+                                )}
+                                {prompt && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-1.5 text-[10px] bg-background/80"
+                                    onClick={() => { setMidjourneyPrompt(prompt); setShowMidjourneyDialog(true); }}
+                                    data-testid={`btn-midjourney-${panel.key}`}
+                                  >
+                                    <Copy className="w-3 h-3 mr-0.5" />MJ
+                                  </Button>
+                                )}
+                              </div>
                             )}
                           </div>
                         );
