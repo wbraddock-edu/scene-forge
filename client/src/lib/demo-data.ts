@@ -147,10 +147,86 @@ export const DEMO_PROFILE: SceneProfile = {
   symbolicElements: "The corridor as birth canal — entering the unknown. Light versus dark as knowledge versus ignorance. The alien script as language barrier — communication attempted but imperfect. The team's tactical formation as civilization's fragile order imposed on chaos.",
   directorNotes: "This scene is the audience's first real experience of dread — pace it carefully. Don't rush the discovery beats. Let the actors react to the environment physically — touch things, look around, breathe. The corridor should feel endless. Consider using longer takes (20-30 seconds) to build real-time tension rather than cutting for pace. The team split at the end should feel like a mistake the audience can see coming but the characters can't avoid.",
 
-  // Visual Study Prompts
+  // Visual Study Prompts (legacy fixed panels)
   visualMasterShot: "A wide cinematic establishing shot of a dark derelict starship corridor stretching into darkness. Three figures in futuristic EVA suits with helmet lights cutting through atmospheric haze and floating debris. Amber emergency strip lighting on the ceiling creates pools of sickly warm light between stretches of deep shadow. Alien script visible on vaulted walls. The scale is overwhelming — the corridor dwarfs the human figures. Widescreen 2.39:1 composition. The mood is oppressive dread and isolation.",
   visualDramaticMoment: "A tense medium close-up of Captain Aria Voss in her EVA suit helmet, her face half-lit by amber emergency light and half in deep shadow. Through her visor glass, alien script is faintly reflected. Her expression is a mix of determination and dawning fear. Behind her, out of focus, the corridor stretches into darkness with a single emergency light flickering. Cinematic lighting, shallow depth of field, film grain.",
   visualCharacterCoverage: "An over-the-shoulder shot from behind Marine Sgt. Torres as he faces Captain Aria Voss in a narrow section of the derelict corridor. Torres's hand rests on his holstered sidearm. Aria's helmet light illuminates both their faces in harsh white light. The ambient amber emergency glow creates a warm halo around them. Their body language shows conflict — Torres rigid and defensive, Aria leaning forward assertively. Engineer Kael visible in the background examining the wall.",
   visualDetailInsert: "An extreme close-up of deep scratch marks gouged into the metal wall of a derelict starship corridor. A helmet-mounted flashlight beam sweeps across the marks, revealing their depth — something clawed desperately into hardened alloy. The scratches are aged but preserved in the vacuum. Tiny floating dust particles catch the light beam. The metal shows stress fractures around the deepest gouges. Macro photography aesthetic, cinematic lighting.",
   visualLightingStudy: "An atmospheric lighting study of the derelict starship corridor showing the dual-temperature light design. Warm amber emergency strip lights run along the ceiling in broken intervals, creating pools of sickly golden light. Cool white helmet-mounted floods cut through volumetric haze, creating visible light shafts with hard shadows. Deep impenetrable darkness fills the spaces between. Floating debris catches both light temperatures. The overall mood is beautiful but deeply unsettling — a cathedral of dread.",
+
+  // Dynamic per-shot visual prompts — matches the 12 shots in shotListDetailed
+  visualShotPrompts: JSON.stringify([
+    {
+      shotNumber: 1,
+      label: "WIDE — Airlock entry",
+      sublabel: "Shot #1",
+      prompt: "A wide cinematic Steadicam shot following three figures in futuristic EVA suits as they step through a breached airlock into a vast derelict starship corridor. 24mm lens perspective. The team is silhouetted against their helmet lights cutting through thick atmospheric haze and floating debris particles. Amber emergency strip lighting on the vaulted ceiling casts pools of sickly warm light. Alien script is faintly visible on the walls. The scale is overwhelming — the corridor dwarfs the human figures. Widescreen 2.39:1 composition. The mood is oppressive dread and isolation in deep space."
+    },
+    {
+      shotNumber: 2,
+      label: "MEDIUM — Torres motion tracker",
+      sublabel: "Shot #2",
+      prompt: "A static medium shot of Marine Sgt. Torres in a tactical EVA suit checking a handheld motion tracker device inside a dark derelict starship corridor. 50mm lens. The green phosphor glow of the tracker display illuminates his face from below, casting eerie upward shadows across his helmet visor. His expression is focused and alert. Behind him, the corridor fades into darkness with faint amber emergency lighting. The device's screen shows intermittent blips. Cinematic lighting, film grain, sci-fi military aesthetic."
+    },
+    {
+      shotNumber: 3,
+      label: "WIDE PAN — Corridor reveal",
+      sublabel: "Shot #3",
+      prompt: "A slow horizontal panning wide shot revealing the immense length of a derelict starship main corridor. 35mm lens. Failing amber emergency strip lights run along the ceiling in broken intervals, creating pools of golden light between vast stretches of impenetrable darkness. The corridor stretches endlessly into shadow. Floating debris particles catch the light. Alien script etched into the vaulted walls reflects helmet light beams. Volumetric haze fills the air. The scale is cathedral-like. Cinematic widescreen, environmental establishing shot, oppressive atmosphere."
+    },
+    {
+      shotNumber: 4,
+      label: "CU — Alien script on wall",
+      sublabel: "Shot #4",
+      prompt: "An extreme close-up of a gloved hand in a futuristic EVA suit gently touching alien script carved into the metal wall of a derelict starship. 85mm macro lens perspective. The script appears to shimmer and shift slightly under the moving helmet light beam. The alien characters are intricate, geometric, and unsettling — clearly not human in origin. The glove's textured surface contrasts with the smooth, ancient metal. Floating dust motes catch the light. Shallow depth of field, cinematic macro photography, mysterious sci-fi aesthetic."
+    },
+    {
+      shotNumber: 5,
+      label: "OTS — Torres scanning ahead",
+      sublabel: "Shot #5",
+      prompt: "An over-the-shoulder shot from behind Marine Sgt. Torres in tactical EVA gear as he scans the dark corridor ahead. 40mm lens with shallow depth of field. Focus racks from Torres's armored shoulder and helmet in the foreground to the deep impenetrable darkness stretching ahead. His helmet light cuts a cone of white light through atmospheric haze. The corridor walls show alien script and damage. The amber emergency lighting creates warm pools in the distance. Tension and dread, cinematic POV composition."
+    },
+    {
+      shotNumber: 6,
+      label: "INSERT — Scratch marks",
+      sublabel: "Shot #6",
+      prompt: "An extreme close-up insert shot of deep scratch marks gouged into the metal wall of a derelict starship corridor. 100mm macro lens. A helmet-mounted flashlight beam sweeps across the marks, revealing terrifying depth — something clawed desperately into hardened alloy with inhuman strength. The scratches are aged but perfectly preserved in the vacuum of space. Tiny floating dust particles catch the light beam. The metal shows stress fractures and deformation around the deepest gouges. Macro photography aesthetic, cinematic lighting, evidence of violence and horror."
+    },
+    {
+      shotNumber: 7,
+      label: "MED TWO-SHOT — Aria & Torres conflict",
+      sublabel: "Shot #7",
+      prompt: "A medium two-shot of Captain Aria Voss and Marine Sgt. Torres in a heated whispered exchange inside a derelict starship corridor. 50mm lens. Split lighting — half of their faces lit by warm amber emergency light, the other half in deep shadow. Aria leans forward assertively, her body language commanding. Torres stands rigid and defensive, hand near his holstered sidearm. Their helmet lights create harsh white highlights. The narrow corridor compresses the space between them. Tension is palpable. Cinematic dramatic composition, conflict and authority."
+    },
+    {
+      shotNumber: 8,
+      label: "WIDE — Junction reveal",
+      sublabel: "Shot #8",
+      prompt: "A wide dolly-back shot as three figures in EVA suits enter a larger junction chamber inside a derelict starship. 24mm lens. The camera pulls back to reveal branching corridors splitting off in multiple directions. Floating debris drifts in partial gravity — metal fragments, crystallized particles, remnants of the ship's past. Emergency lighting glows amber from multiple corridor entrances. The junction feels like a crossroads — a decision point. The scale dwarfs the team. Volumetric haze catches intersecting light beams. Cinematic widescreen, sci-fi exploration, mounting dread."
+    },
+    {
+      shotNumber: 9,
+      label: "CU — Aria's visor reaction",
+      sublabel: "Shot #9",
+      prompt: "A tight close-up of Captain Aria Voss's face through her EVA helmet visor as she processes a disturbing alien script translation. 85mm lens, extremely tight on her eyes. Her expression shifts from concentration to dawning horror. The reflection of glowing alien writing is visible in the curved glass of her visor. Behind her, out of focus, the corridor stretches into darkness. Warm amber light from one side, cool helmet light from the other creates dramatic split lighting. Shallow depth of field, cinematic emotional pivot, film grain."
+    },
+    {
+      shotNumber: 10,
+      label: "WIDE OVERHEAD — Team splits",
+      sublabel: "Shot #10",
+      prompt: "A dramatic overhead crane shot looking straight down a derelict starship corridor as the team of EVA-suited figures splits into two groups heading in opposite directions. 20mm wide lens. The two groups walk away from the junction point toward separate pools of amber emergency light, leaving darkness between them. The overhead angle makes them look small and vulnerable — a visual metaphor for the danger of separation. Alien script visible on the floor. Floating debris. Cinematic widescreen, act break composition, isolation and vulnerability."
+    },
+    {
+      shotNumber: 11,
+      label: "INSERT — Tracker contacts",
+      sublabel: "Shot #11",
+      prompt: "An extreme close-up insert of a military motion tracker display filling the frame. 100mm lens. The green phosphor screen shows multiple intermittent contacts — blips appearing and disappearing at various ranges. The device's worn metal casing frames the glowing display. Torres's gloved thumb is visible on the edge of the device. The green light reflects off nearby surfaces. The contacts suggest something is moving in the ship — multiple somethings. Macro photography, sci-fi military tech, threat escalation, tension."
+    },
+    {
+      shotNumber: 12,
+      label: "MEDIUM — Groups diverge",
+      sublabel: "Shot #12",
+      prompt: "A static medium shot watching two groups of EVA-suited figures walk in opposite directions down branching corridors of a derelict starship. 35mm lens. Long hold composition. The figures gradually disappear into separate pools of darkness, their helmet lights shrinking to distant pinpoints. Amber emergency lighting creates isolated warm patches. The empty space in the center of frame grows as they separate. Floating debris drifts slowly. The mood is isolation, dread, and the terrible certainty of a mistake being made. Cinematic widescreen, horror atmosphere."
+    }
+  ]),
 };
