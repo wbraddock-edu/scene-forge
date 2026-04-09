@@ -335,7 +335,14 @@ This text is a ${sourceType === "screenplay" ? "screenplay or script" : "prose m
 
 Fill in EVERY field with rich, specific detail drawn from the text. Where the text doesn't explicitly state something, make intelligent inferences consistent with what IS stated. For fields where the text provides no basis for inference, write "[Not enough information — consider developing this area]".
 
-For the 5 visual study fields (visualMasterShot, visualDramaticMoment, visualCharacterCoverage, visualDetailInsert, visualLightingStudy), create detailed AI image generation prompts. Each prompt must describe this specific scene with its exact setting, characters, lighting, and mood. Make every prompt vivid, specific, and production-ready — these are meant to generate a complete scene visual study like a film storyboard artist would create.
+For the 5 legacy visual study fields (visualMasterShot, visualDramaticMoment, visualCharacterCoverage, visualDetailInsert, visualLightingStudy), create detailed AI image generation prompts. Each prompt must describe this specific scene with its exact setting, characters, lighting, and mood. Make every prompt vivid, specific, and production-ready — these are meant to generate a complete scene visual study like a film storyboard artist would create.
+
+IMPORTANT: You must also generate a "visualShotPrompts" field. This is a JSON-encoded string containing an array of objects — one for EACH shot in the shotListDetailed field. Each object must have:
+  - "shotNumber": the shot number (integer, starting at 1)
+  - "label": a short label like "WIDE — Establishing the courtroom" (shot type + brief description, max ~40 chars)
+  - "sublabel": "Shot #N" where N is the shot number
+  - "prompt": a detailed AI image generation prompt for this specific shot. Use the shot's type, framing, camera movement, and purpose to craft a vivid, specific image prompt describing exactly what this frame would look like. Include location, characters, lighting, composition, and mood.
+The number of entries in this array MUST exactly match the number of shots in shotListDetailed. This array drives the visual study panel grid.
 
 Return ONLY a JSON object matching this exact structure (all values are strings):
 {
@@ -404,7 +411,9 @@ Return ONLY a JSON object matching this exact structure (all values are strings)
   "visualDramaticMoment": "A detailed prompt for the most emotionally charged frame of this scene. Capture the peak dramatic moment — facial expressions, body language, spatial relationships. Art style: dramatic cinematic still, high contrast.",
   "visualCharacterCoverage": "A detailed prompt for a medium/OTS shot showing character interactions. Include specific character details, eyeline direction, and emotional quality. Art style: film coverage shot, natural lighting.",
   "visualDetailInsert": "A detailed prompt for a close-up insert shot of a critical prop, gesture, or detail that carries meaning in this scene. Art style: cinematic macro/detail shot.",
-  "visualLightingStudy": "A detailed prompt showcasing the scene's atmosphere through its lighting. Emphasize color temperature, shadow patterns, light sources, and how light sculpts the environment and faces. Art style: atmospheric lighting study, production design reference."
+  "visualLightingStudy": "A detailed prompt showcasing the scene's atmosphere through its lighting. Emphasize color temperature, shadow patterns, light sources, and how light sculpts the environment and faces. Art style: atmospheric lighting study, production design reference.",
+
+  "visualShotPrompts": "[{\"shotNumber\":1,\"label\":\"WIDE — Establishing description\",\"sublabel\":\"Shot #1\",\"prompt\":\"Detailed image prompt for shot 1...\"},{\"shotNumber\":2,\"label\":\"MED — Character description\",\"sublabel\":\"Shot #2\",\"prompt\":\"Detailed image prompt for shot 2...\"},...one entry per shot in the shot list]"
 }`;
 }
 
@@ -500,35 +509,46 @@ function buildDocx(profile: SceneProfile, imageBuffers?: Record<string, Buffer>)
       })
     );
 
-    for (const [key, label] of Object.entries(VISUAL_PANEL_NAMES)) {
-      const buf = imageBuffers[key];
-      if (buf) {
-        children.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: label,
-                bold: true,
-                size: 24,
-                font: "Calibri",
-                color: "2d6a4f",
-              }),
-            ],
-            spacing: { before: 300, after: 150 },
-          }),
-          new Paragraph({
-            children: [
-              new ImageRun({
-                data: buf,
-                transformation: { width: 500, height: 500 },
-                type: "png",
-              }),
-            ],
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 200 },
-          })
-        );
-      }
+    // Build panel label map: merge legacy names + dynamic shot panels
+    const panelLabels: Record<string, string> = { ...VISUAL_PANEL_NAMES };
+    // Add dynamic shot panel labels from visualShotPrompts if present
+    if (profile.visualShotPrompts) {
+      try {
+        const shotPrompts = JSON.parse(profile.visualShotPrompts) as Array<{ shotNumber: number; label: string }>;
+        for (const sp of shotPrompts) {
+          panelLabels[`shot_${sp.shotNumber}`] = `${sp.shotNumber}. ${sp.label}`;
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    for (const [key, buf] of Object.entries(imageBuffers)) {
+      if (!buf) continue;
+      const label = panelLabels[key] || key;
+      children.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: label,
+              bold: true,
+              size: 24,
+              font: "Calibri",
+              color: "2d6a4f",
+            }),
+          ],
+          spacing: { before: 300, after: 150 },
+        }),
+        new Paragraph({
+          children: [
+            new ImageRun({
+              data: buf,
+              transformation: { width: 500, height: 500 },
+              type: "png",
+            }),
+          ],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 200 },
+        })
+      );
     }
     children.push(emptyLine());
   }
@@ -1256,21 +1276,31 @@ export async function registerRoutes(httpServer: Server, app: Express) {
               border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: "cccccc" } },
             })
           );
-          for (const [key, label] of Object.entries(VISUAL_PANEL_NAMES)) {
-            const buf = imageBuffers[key];
-            if (buf) {
-              children.push(
-                new Paragraph({
-                  children: [new TextRun({ text: label, bold: true, size: 24, font: "Calibri", color: "2d6a4f" })],
-                  spacing: { before: 300, after: 150 },
-                }),
-                new Paragraph({
-                  children: [new ImageRun({ data: buf, transformation: { width: 500, height: 500 }, type: "png" })],
-                  alignment: AlignmentType.CENTER,
-                  spacing: { after: 200 },
-                })
-              );
-            }
+          // Build panel label map: merge legacy names + dynamic shot panels
+          const panelLabels2: Record<string, string> = { ...VISUAL_PANEL_NAMES };
+          if (profile.visualShotPrompts) {
+            try {
+              const shotPrompts = JSON.parse(profile.visualShotPrompts) as Array<{ shotNumber: number; label: string }>;
+              for (const sp of shotPrompts) {
+                panelLabels2[`shot_${sp.shotNumber}`] = `${sp.shotNumber}. ${sp.label}`;
+              }
+            } catch { /* ignore parse errors */ }
+          }
+
+          for (const [key, buf] of Object.entries(imageBuffers)) {
+            if (!buf) continue;
+            const label = panelLabels2[key] || key;
+            children.push(
+              new Paragraph({
+                children: [new TextRun({ text: label, bold: true, size: 24, font: "Calibri", color: "2d6a4f" })],
+                spacing: { before: 300, after: 150 },
+              }),
+              new Paragraph({
+                children: [new ImageRun({ data: buf, transformation: { width: 500, height: 500 }, type: "png" })],
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 200 },
+              })
+            );
           }
           children.push(eLine());
         }

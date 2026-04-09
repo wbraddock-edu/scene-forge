@@ -158,12 +158,16 @@ export const sceneProfileSchema = z.object({
   symbolicElements: z.string(),
   directorNotes: z.string(),
 
-  // Visual Study Prompts (5 AI-generated)
+  // Visual Study Prompts (5 AI-generated) — legacy fixed panels
   visualMasterShot: z.string(),
   visualDramaticMoment: z.string(),
   visualCharacterCoverage: z.string(),
   visualDetailInsert: z.string(),
   visualLightingStudy: z.string(),
+
+  // Dynamic per-shot visual prompts — JSON array matching the shot list
+  // Each entry: { "shotNumber": 1, "label": "WIDE — Establishing", "sublabel": "Shot #1", "prompt": "..." }
+  visualShotPrompts: z.string().optional(),
 });
 
 export type SceneProfile = z.infer<typeof sceneProfileSchema>;

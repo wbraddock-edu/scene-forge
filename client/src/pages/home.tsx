@@ -174,7 +174,8 @@ interface DevelopedItem {
   images: Record<string, string>;
 }
 
-const VISUAL_PANELS = [
+// Legacy fallback panels for scenes analyzed before dynamic shot prompts
+const VISUAL_PANELS_FALLBACK = [
   { key: "masterShot", label: "Master Shot", sublabel: "Establishing", promptKey: "visualMasterShot" },
   { key: "dramaticMoment", label: "Key Moment", sublabel: "Drama", promptKey: "visualDramaticMoment" },
   { key: "characterCoverage", label: "Character Coverage", sublabel: "Performance", promptKey: "visualCharacterCoverage" },
@@ -182,6 +183,31 @@ const VISUAL_PANELS = [
   { key: "lightingStudy", label: "Lighting Study", sublabel: "Mood", promptKey: "visualLightingStudy" },
   { key: "customScene", label: "Custom Scene", sublabel: "Director's Shot", promptKey: "" },
 ];
+
+interface ShotPromptEntry {
+  shotNumber: number;
+  label: string;
+  sublabel: string;
+  prompt: string;
+}
+
+/** Parse visualShotPrompts JSON string into panel definitions */
+function parseShotPrompts(profile: SceneProfile): { key: string; label: string; sublabel: string; prompt: string }[] | null {
+  const raw = (profile as any).visualShotPrompts;
+  if (!raw || typeof raw !== "string") return null;
+  try {
+    const entries: ShotPromptEntry[] = JSON.parse(raw);
+    if (!Array.isArray(entries) || entries.length === 0) return null;
+    return entries.map((e) => ({
+      key: `shot_${e.shotNumber}`,
+      label: e.label,
+      sublabel: e.sublabel || `Shot #${e.shotNumber}`,
+      prompt: e.prompt,
+    }));
+  } catch {
+    return null;
+  }
+}
 
 export default function Home() {
   const { theme, toggleTheme } = useTheme();
@@ -655,18 +681,31 @@ export default function Home() {
     }
   }, [expandedScene, selectedStyle, referenceImages, imageProvider, apiKey, toast]);
 
-  // Generate all images
+  // Generate all images — uses dynamic shot panels when available, falls back to legacy
   const generateAllImages = useCallback(async () => {
     if (!expandedScene || !developedScenes[expandedScene]) return;
     setGeneratingAll(true);
     const profile = developedScenes[expandedScene].profile;
-    const panels = VISUAL_PANELS.filter((p) => p.key !== "customScene");
-    for (const panel of panels) {
-      const prompt = (profile as any)[panel.promptKey];
-      if (!prompt) continue;
-      await generateImage(panel.key, prompt);
-      if (panels.indexOf(panel) < panels.length - 1) {
-        await new Promise((r) => setTimeout(r, 8000));
+    const dynamicPanels = parseShotPrompts(profile);
+    if (dynamicPanels) {
+      for (let i = 0; i < dynamicPanels.length; i++) {
+        const dp = dynamicPanels[i];
+        if (!dp.prompt) continue;
+        await generateImage(dp.key, dp.prompt);
+        if (i < dynamicPanels.length - 1) {
+          await new Promise((r) => setTimeout(r, 8000));
+        }
+      }
+    } else {
+      // Legacy fallback
+      const panels = VISUAL_PANELS_FALLBACK.filter((p) => p.key !== "customScene");
+      for (const panel of panels) {
+        const prompt = (profile as any)[panel.promptKey];
+        if (!prompt) continue;
+        await generateImage(panel.key, prompt);
+        if (panels.indexOf(panel) < panels.length - 1) {
+          await new Promise((r) => setTimeout(r, 8000));
+        }
       }
     }
     setGeneratingAll(false);
@@ -1740,124 +1779,155 @@ export default function Home() {
                 )}
               </div>
 
-              {/* Generate all */}
-              <Button
-                size="sm"
-                onClick={generateAllImages}
-                disabled={generatingAll || generatingImage !== null}
-                className="w-full text-xs"
-                data-testid="btn-generate-all"
-              >
-                {generatingAll ? (
-                  <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating all panels...</>
-                ) : (
-                  <><PlayCircle className="w-3.5 h-3.5 mr-1" />Generate All (5 panels)</>
-                )}
-              </Button>
+              {/* Dynamic panels from shot list, or legacy fallback */}
+              {(() => {
+                const dynamicPanels = parseShotPrompts(profile);
+                const hasDynamic = dynamicPanels && dynamicPanels.length > 0;
+                // Build the effective panel list: dynamic shot panels + custom scene panel at end
+                const effectivePanels = hasDynamic
+                  ? [
+                      ...dynamicPanels.map((dp) => ({
+                        key: dp.key,
+                        label: dp.label,
+                        sublabel: dp.sublabel,
+                        prompt: dp.prompt,
+                        isCustom: false,
+                      })),
+                      { key: "customScene", label: "Custom Scene", sublabel: "Director's Shot", prompt: "", isCustom: true },
+                    ]
+                  : VISUAL_PANELS_FALLBACK.map((p) => ({
+                      key: p.key,
+                      label: p.label,
+                      sublabel: p.sublabel,
+                      prompt: p.key === "customScene" ? "" : ((profile as any)[p.promptKey] || ""),
+                      isCustom: p.key === "customScene",
+                    }));
+                const generatablePanels = effectivePanels.filter((p) => !p.isCustom);
+                const panelCount = generatablePanels.length;
 
-              {/* 2x3 visual grid */}
-              <div className="grid grid-cols-2 gap-3" data-testid="visual-grid">
-                {VISUAL_PANELS.map((panel) => {
-                  const img = images[panel.key];
-                  const isCustom = panel.key === "customScene";
-                  const isAnchor = panel.key === "masterShot";
-                  const prompt = isCustom ? customPrompt : (profile as any)[panel.promptKey] || "";
+                return (
+                  <>
+                    {/* Generate all */}
+                    <Button
+                      size="sm"
+                      onClick={generateAllImages}
+                      disabled={generatingAll || generatingImage !== null}
+                      className="w-full text-xs"
+                      data-testid="btn-generate-all"
+                    >
+                      {generatingAll ? (
+                        <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />Generating all panels...</>
+                      ) : (
+                        <><PlayCircle className="w-3.5 h-3.5 mr-1" />Generate All ({panelCount} panels)</>
+                      )}
+                    </Button>
 
-                  return (
-                    <div key={panel.key} className="relative group" data-testid={`visual-panel-${panel.key}`}>
-                      <div className="aspect-square bg-muted/50 rounded-lg border border-border overflow-hidden relative">
-                        {img ? (
-                          <>
-                            <img
-                              src={`data:image/png;base64,${img}`}
-                              alt={panel.label}
-                              className="w-full h-full object-cover"
-                            />
-                            <div className="visual-label-overlay absolute bottom-0 left-0 right-0 p-2">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="text-[11px] font-semibold text-white">{panel.label}</p>
-                                  <p className="text-[10px] text-white/60">{panel.sublabel}</p>
-                                </div>
-                                <div className="flex gap-1">
-                                  {isAnchor && (
-                                    <Badge className="text-[9px] bg-primary/90 text-primary-foreground" data-testid="badge-anchor">ANCHOR</Badge>
+                    {/* Visual grid */}
+                    <div className="grid grid-cols-2 gap-3" data-testid="visual-grid">
+                      {effectivePanels.map((panel, idx) => {
+                        const img = images[panel.key];
+                        const isCustom = panel.isCustom;
+                        const isAnchor = idx === 0 && !isCustom;
+                        const prompt = isCustom ? customPrompt : panel.prompt;
+
+                        return (
+                          <div key={panel.key} className="relative group" data-testid={`visual-panel-${panel.key}`}>
+                            <div className="aspect-square bg-muted/50 rounded-lg border border-border overflow-hidden relative">
+                              {img ? (
+                                <>
+                                  <img
+                                    src={`data:image/png;base64,${img}`}
+                                    alt={panel.label}
+                                    className="w-full h-full object-cover"
+                                  />
+                                  <div className="visual-label-overlay absolute bottom-0 left-0 right-0 p-2">
+                                    <div className="flex items-center justify-between">
+                                      <div>
+                                        <p className="text-[11px] font-semibold text-white">{panel.label}</p>
+                                        <p className="text-[10px] text-white/60">{panel.sublabel}</p>
+                                      </div>
+                                      <div className="flex gap-1">
+                                        {isAnchor && (
+                                          <Badge className="text-[9px] bg-primary/90 text-primary-foreground" data-testid="badge-anchor">ANCHOR</Badge>
+                                        )}
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 text-white hover:text-primary"
+                                          onClick={() => downloadImage(img, `scene_${expandedScene}_${panel.key}.png`)}
+                                          data-testid={`btn-download-${panel.key}`}
+                                        >
+                                          <Download className="w-3 h-3" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center p-3 gap-2">
+                                  {isCustom ? (
+                                    <>
+                                      <p className="text-[11px] font-semibold text-muted-foreground">{panel.label}</p>
+                                      <Textarea
+                                        value={customPrompt}
+                                        onChange={(e) => setCustomPrompt(e.target.value)}
+                                        placeholder="Describe your custom shot..."
+                                        className="text-[11px] min-h-[60px] bg-background/50 border-border"
+                                        data-testid="input-custom-prompt"
+                                      />
+                                      <Button
+                                        size="sm"
+                                        className="text-[11px] w-full"
+                                        onClick={() => generateImage("customScene", customPrompt)}
+                                        disabled={!customPrompt || generatingImage === "customScene"}
+                                        data-testid="btn-generate-custom"
+                                      >
+                                        {generatingImage === "customScene" ? <Loader2 className="w-3 h-3 animate-spin" /> : "Generate"}
+                                      </Button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Image className="w-6 h-6 text-muted-foreground/40" />
+                                      <p className="text-[11px] font-semibold text-muted-foreground">{panel.label}</p>
+                                      <p className="text-[10px] text-muted-foreground/60">{panel.sublabel}</p>
+                                      {isAnchor && (
+                                        <Badge variant="outline" className="text-[9px]" data-testid="badge-anchor-empty">ANCHOR</Badge>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        className="text-[11px]"
+                                        onClick={() => generateImage(panel.key, prompt)}
+                                        disabled={generatingImage === panel.key}
+                                        data-testid={`btn-generate-${panel.key}`}
+                                      >
+                                        {generatingImage === panel.key ? <Loader2 className="w-3 h-3 animate-spin" /> : "Generate"}
+                                      </Button>
+                                    </>
                                   )}
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 text-white hover:text-primary"
-                                    onClick={() => downloadImage(img, `scene_${expandedScene}_${panel.key}.png`)}
-                                    data-testid={`btn-download-${panel.key}`}
-                                  >
-                                    <Download className="w-3 h-3" />
-                                  </Button>
                                 </div>
-                              </div>
+                              )}
                             </div>
-                          </>
-                        ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center p-3 gap-2">
-                            {isCustom ? (
-                              <>
-                                <p className="text-[11px] font-semibold text-muted-foreground">{panel.label}</p>
-                                <Textarea
-                                  value={customPrompt}
-                                  onChange={(e) => setCustomPrompt(e.target.value)}
-                                  placeholder="Describe your custom shot..."
-                                  className="text-[11px] min-h-[60px] bg-background/50 border-border"
-                                  data-testid="input-custom-prompt"
-                                />
-                                <Button
-                                  size="sm"
-                                  className="text-[11px] w-full"
-                                  onClick={() => generateImage("customScene", customPrompt)}
-                                  disabled={!customPrompt || generatingImage === "customScene"}
-                                  data-testid="btn-generate-custom"
-                                >
-                                  {generatingImage === "customScene" ? <Loader2 className="w-3 h-3 animate-spin" /> : "Generate"}
-                                </Button>
-                              </>
-                            ) : (
-                              <>
-                                <Image className="w-6 h-6 text-muted-foreground/40" />
-                                <p className="text-[11px] font-semibold text-muted-foreground">{panel.label}</p>
-                                <p className="text-[10px] text-muted-foreground/60">{panel.sublabel}</p>
-                                {isAnchor && (
-                                  <Badge variant="outline" className="text-[9px]" data-testid="badge-anchor-empty">ANCHOR</Badge>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  className="text-[11px]"
-                                  onClick={() => generateImage(panel.key, prompt)}
-                                  disabled={generatingImage === panel.key}
-                                  data-testid={`btn-generate-${panel.key}`}
-                                >
-                                  {generatingImage === panel.key ? <Loader2 className="w-3 h-3 animate-spin" /> : "Generate"}
-                                </Button>
-                              </>
+
+                            {/* Midjourney prompt copy */}
+                            {prompt && !isCustom && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="absolute top-1 right-1 h-6 px-1.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity bg-background/80"
+                                onClick={() => { setMidjourneyPrompt(prompt); setShowMidjourneyDialog(true); }}
+                                data-testid={`btn-midjourney-${panel.key}`}
+                              >
+                                <Copy className="w-3 h-3 mr-0.5" />MJ
+                              </Button>
                             )}
                           </div>
-                        )}
-                      </div>
-
-                      {/* Midjourney prompt copy */}
-                      {prompt && !isCustom && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="absolute top-1 right-1 h-6 px-1.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity bg-background/80"
-                          onClick={() => { setMidjourneyPrompt(prompt); setShowMidjourneyDialog(true); }}
-                          data-testid={`btn-midjourney-${panel.key}`}
-                        >
-                          <Copy className="w-3 h-3 mr-0.5" />MJ
-                        </Button>
-                      )}
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
         </main>
