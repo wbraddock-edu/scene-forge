@@ -432,6 +432,7 @@ export default function Home() {
   const backToProjects = useCallback(async () => {
     if (activeProjectId) {
       try {
+        const assetsForSave = importedAssets.map(({ profile, ...rest }) => rest);
         await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
           state: {
             manuscriptText,
@@ -442,10 +443,10 @@ export default function Home() {
             detectedScenes,
             developedScenes,
             referenceImages,
-            importedAssets,
+            importedAssets: assetsForSave,
           },
         });
-      } catch { /* silent */ }
+      } catch (err) { console.error("Auto-save failed:", err); }
     }
     setActiveProjectId(null);
     setActiveProjectName("");
@@ -463,6 +464,8 @@ export default function Home() {
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(async () => {
       try {
+        // Strip full profile data from saved assets to reduce payload size
+        const assetsForSave = importedAssets.map(({ profile, ...rest }) => rest);
         await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
           state: {
             manuscriptText,
@@ -473,10 +476,10 @@ export default function Home() {
             detectedScenes,
             developedScenes,
             referenceImages,
-            importedAssets,
+            importedAssets: assetsForSave,
           },
         });
-      } catch { /* silent */ }
+      } catch (err) { console.error("Auto-save failed:", err); }
     }, 2000);
   }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
 
@@ -511,10 +514,11 @@ export default function Home() {
   async function handleLogout() {
     if (activeProjectId) {
       try {
+        const assetsForSave = importedAssets.map(({ profile, ...rest }) => rest);
         await apiRequest("PUT", `/api/projects/${activeProjectId}`, {
-          state: { manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets },
+          state: { manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets: assetsForSave },
         });
-      } catch { /* silent */ }
+      } catch (err) { console.error("Auto-save failed:", err); }
     }
     apiRequest("POST", "/api/auth/logout").catch(() => {});
     setSessionToken(null);
@@ -1643,55 +1647,67 @@ export default function Home() {
       let updatedCount = 0;
       let addedCount = 0;
 
-      setImportedAssets((prev) => {
-        const result = [...prev];
-        for (const asset of newAssets) {
-          const existingIdx = result.findIndex(
-            (a) => a.name === asset.name && a.source === asset.source
-          );
-          if (existingIdx !== -1) {
-            result[existingIdx] = asset;
-            updatedCount++;
-          } else {
-            result.push(asset);
-            addedCount++;
-          }
+      // Compute updated assets in a local variable so we can save immediately
+      const updatedAssets = [...importedAssets];
+      for (const asset of newAssets) {
+        const existingIdx = updatedAssets.findIndex(
+          (a) => a.name === asset.name && a.source === asset.source
+        );
+        if (existingIdx !== -1) {
+          updatedAssets[existingIdx] = asset;
+          updatedCount++;
+        } else {
+          updatedAssets.push(asset);
+          addedCount++;
         }
-        return result;
-      });
+      }
+      setImportedAssets(updatedAssets);
 
-      // Deduplicate reference images in sync with asset dedup
-      setReferenceImages((prev) => {
-        const result = [...prev];
-        for (const asset of newAssets) {
-          const newRef = extractRefImage(asset);
-          // Find old asset to locate its existing reference image
-          const oldAsset = importedAssets.find(
-            (a) => a.name === asset.name && a.source === asset.source
-          );
-          if (oldAsset) {
-            const oldRef = extractRefImage(oldAsset);
-            if (oldRef && newRef) {
-              const oldIdx = result.indexOf(oldRef);
-              if (oldIdx !== -1) {
-                result[oldIdx] = newRef;
-                continue;
-              }
+      // Compute updated reference images in a local variable
+      const updatedRefs = [...referenceImages];
+      for (const asset of newAssets) {
+        const newRef = extractRefImage(asset);
+        // Find old asset to locate its existing reference image
+        const oldAsset = importedAssets.find(
+          (a) => a.name === asset.name && a.source === asset.source
+        );
+        if (oldAsset) {
+          const oldRef = extractRefImage(oldAsset);
+          if (oldRef && newRef) {
+            const oldIdx = updatedRefs.indexOf(oldRef);
+            if (oldIdx !== -1) {
+              updatedRefs[oldIdx] = newRef;
+              continue;
             }
           }
-          // New asset — append its reference image
-          if (newRef) {
-            result.push(newRef);
-          }
         }
-        return result.slice(0, 6);
-      });
+        // New asset — append its reference image
+        if (newRef) {
+          updatedRefs.push(newRef);
+        }
+      }
+      const finalRefs = updatedRefs.slice(0, 6);
+      setReferenceImages(finalRefs);
 
       const parts: string[] = [];
       if (addedCount > 0) parts.push(`${addedCount} imported`);
       if (updatedCount > 0) parts.push(`${updatedCount} updated`);
       toast({ title: "Assets imported", description: `${parts.join(", ")}.` });
       setStep("dashboard");
+
+      // Force immediate save after import (bypass debounce) to ensure persistence
+      if (activeProjectId) {
+        // Strip full profile data from saved assets to reduce payload size
+        const assetsForSave = updatedAssets.map(({ profile, ...rest }) => rest);
+        apiRequest("PUT", `/api/projects/${activeProjectId}`, {
+          state: {
+            manuscriptText, sourceType, provider, apiKey, selectedStyle,
+            detectedScenes, developedScenes,
+            referenceImages: finalRefs,
+            importedAssets: assetsForSave,
+          },
+        }).catch((err) => console.error("Failed to save after import:", err));
+      }
     };
 
     return (
