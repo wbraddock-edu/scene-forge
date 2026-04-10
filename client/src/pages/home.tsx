@@ -60,6 +60,7 @@ import {
   CreditCard,
   RotateCcw,
   RefreshCw,
+  X,
 } from "lucide-react";
 import type { DetectedScene, SceneProfile } from "@shared/schema";
 import { ART_STYLES } from "@shared/schema";
@@ -366,7 +367,15 @@ export default function Home() {
         }
         if (state.developedScenes) setDevelopedScenes(state.developedScenes);
         if (state.referenceImages) setReferenceImages(state.referenceImages);
-        if (state.importedAssets) setImportedAssets(state.importedAssets);
+        if (state.importedAssets) {
+          // Deduplicate by name + source, keeping only the last occurrence
+          const seen = new Map();
+          for (const asset of state.importedAssets) {
+            const key = `${asset.source}::${asset.name}`;
+            seen.set(key, asset);
+          }
+          setImportedAssets(Array.from(seen.values()));
+        }
       } else {
         setStep("upload");
       }
@@ -2392,14 +2401,30 @@ export default function Home() {
         {/* Reference Library */}
         {importedAssets.length > 0 && (
           <div className="mt-8 max-w-[1400px]">
-            <button
-              className="flex items-center gap-2 mb-3 w-full text-left"
-              onClick={() => setImportRefLibOpen((v) => !v)}
-            >
-              <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>Reference Library</span>
-              <span className="text-[10px] font-mono" style={{ color: "hsl(220,5%,52%)" }}>({importedAssets.length} asset{importedAssets.length !== 1 ? "s" : ""})</span>
-              <ChevronDown className="w-3.5 h-3.5 ml-1 transition-transform" style={{ color: "hsl(220,5%,52%)", transform: importRefLibOpen ? "rotate(0deg)" : "rotate(-90deg)" }} />
-            </button>
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                className="flex items-center gap-2 text-left flex-1"
+                onClick={() => setImportRefLibOpen((v) => !v)}
+              >
+                <span className="text-xs font-mono font-semibold tracking-wider uppercase" style={{ color: "hsl(163,100%,42%)" }}>Reference Library</span>
+                <span className="text-[10px] font-mono" style={{ color: "hsl(220,5%,52%)" }}>({importedAssets.length} asset{importedAssets.length !== 1 ? "s" : ""})</span>
+                <ChevronDown className="w-3.5 h-3.5 ml-1 transition-transform" style={{ color: "hsl(220,5%,52%)", transform: importRefLibOpen ? "rotate(0deg)" : "rotate(-90deg)" }} />
+              </button>
+              <button
+                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono hover:bg-destructive/20 transition-colors"
+                style={{ color: "hsl(0,70%,60%)" }}
+                onClick={() => {
+                  if (confirm("Clear all imported assets? This cannot be undone.")) {
+                    setImportedAssets([]);
+                    setReferenceImages([]);
+                  }
+                }}
+                title="Clear all imported assets"
+              >
+                <Trash2 className="w-3 h-3" />
+                Clear All
+              </button>
+            </div>
             {importRefLibOpen && (
               <div className="space-y-4">
                 {(["characters", "locations", "props"] as const).map((srcType) => {
@@ -2417,7 +2442,26 @@ export default function Home() {
                         {group.map((asset, i) => {
                           const firstImage = Object.values(asset.images)[0] as string | undefined;
                           return (
-                            <div key={i} className="flex flex-col items-center gap-1" style={{ width: 72 }}>
+                            <div key={i} className="flex flex-col items-center gap-1 relative group" style={{ width: 72 }}>
+                              <button
+                                className="absolute -top-1 -right-1 z-10 w-4 h-4 rounded-full bg-destructive/80 hover:bg-destructive flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={() => {
+                                  const key = `${asset.source}::${asset.name}`;
+                                  // Remove matching reference image by comparing the asset's first image
+                                  const rawImg = Object.values(asset.images)[0] as string | undefined;
+                                  if (rawImg) {
+                                    const refStr = rawImg.startsWith("data:") ? rawImg : `data:image/png;base64,${rawImg}`;
+                                    setReferenceImages((prev) => {
+                                      const idx = prev.indexOf(refStr);
+                                      return idx !== -1 ? prev.filter((_, j) => j !== idx) : prev;
+                                    });
+                                  }
+                                  setImportedAssets((prev) => prev.filter((a) => `${a.source}::${a.name}` !== key));
+                                }}
+                                title={`Remove ${asset.name}`}
+                              >
+                                <X className="w-2.5 h-2.5 text-white" />
+                              </button>
                               <div className="w-16 h-16 rounded-lg overflow-hidden border" style={{ borderColor: "hsl(225,10%,18%)", background: "hsl(225,15%,10%)" }}>
                                 {firstImage ? (
                                   <img src={`data:image/png;base64,${firstImage}`} alt={asset.name} className="w-full h-full object-cover" />
