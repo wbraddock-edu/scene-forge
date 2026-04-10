@@ -1315,6 +1315,54 @@ ${shotDescription}`;
     return res.json({ ok: true, imported: items.length });
   });
 
+  // Enhance a single profile field using AI
+  app.post("/api/enhance", async (req: Request, res: Response) => {
+    try {
+      const { fieldKey, fieldLabel, currentValue, sceneName, sceneContext, provider, apiKey } = req.body;
+      if (!fieldKey || !fieldLabel || !sceneName || !provider || !apiKey) {
+        return res.status(400).json({ error: "Missing required fields: fieldKey, fieldLabel, sceneName, provider, apiKey" });
+      }
+
+      // Field-specific length rules
+      const shortFields = ["sceneNumber", "location", "timeOfDay", "durationEstimate", "sceneType"];
+      const mediumFields = ["narrativePurpose", "mood", "lightingSetup", "colorTemperature", "logline",
+        "audienceLearns", "emotionalArc", "connectionToPreviousScene", "connectionToNextScene",
+        "emotionalStateEntering", "emotionalStateExiting", "dialogueTone", "ambientSound",
+        "dialogueRecordingNotes", "shadowsContrast", "practicalLights", "timeOfDayEffects",
+        "sceneName", "diegeticVsNondiegetic"];
+      // Everything else is long
+
+      let lengthInstruction: string;
+      if (shortFields.includes(fieldKey)) {
+        lengthInstruction = "Respond with 1-5 words only. Be extremely concise.";
+      } else if (mediumFields.includes(fieldKey)) {
+        lengthInstruction = "Respond with 1-3 sentences. Be concise but informative.";
+      } else {
+        lengthInstruction = "Respond with 3-8 sentences. Be detailed and production-ready.";
+      }
+
+      const systemPrompt = `You are a film/TV production bible writer. Based on what we know about this scene from the source material, creatively develop the following section with plausible, story-consistent details. Generate concise, production-ready content. ${lengthInstruction} Return ONLY the content text — no labels, no field names, no markdown formatting, no quotes.`;
+
+      const userPrompt = `Scene: "${sceneName}"
+Known context about this scene:
+${sceneContext || "No additional context available."}
+
+Section to develop: ${fieldLabel}
+${currentValue && !currentValue.includes("[Not enough information") ? `Current value: ${currentValue}` : "This field has no content yet."}
+
+Generate production-ready content for this field.`;
+
+      const result = await callTextAI(provider, apiKey, systemPrompt, userPrompt);
+      const enhanced = result.trim();
+
+      console.log(`[enhance] Generated content for "${fieldLabel}" in scene "${sceneName}": ${enhanced.substring(0, 80)}...`);
+      return res.json({ enhanced });
+    } catch (err: any) {
+      console.error("Enhance field error:", err);
+      return res.status(422).json({ error: err.message });
+    }
+  });
+
   // Export all developed scenes as combined DOCX
   app.post("/api/export-all-docx", async (req: Request, res: Response) => {
     try {

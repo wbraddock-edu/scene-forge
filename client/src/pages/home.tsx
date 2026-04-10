@@ -269,6 +269,12 @@ export default function Home() {
   const [refreshingPanels, setRefreshingPanels] = useState(false);
   const [refreshingShotPrompt, setRefreshingShotPrompt] = useState<string | null>(null);
 
+  // Enhance state
+  const [enhancingField, setEnhancingField] = useState<string | null>(null);
+  const [enhancingAll, setEnhancingAll] = useState(false);
+  const [enhanceProgress, setEnhanceProgress] = useState({ current: 0, total: 0 });
+  const [enhancedFields, setEnhancedFields] = useState<Record<string, Set<string>>>({}); // sceneNumber → Set of enhanced fieldKeys
+
   // Visual study
   const [selectedStyle, setSelectedStyle] = useState(ART_STYLES[0].id);
   const [referenceImages, setReferenceImages] = useState<string[]>([]);
@@ -665,6 +671,108 @@ export default function Home() {
     }
     setDevelopingAll(false);
   }, [detectedScenes, failedScenes, developScene]);
+
+  // Check if a field value is a placeholder needing enhancement
+  const isPlaceholderField = (val: string | undefined) => {
+    if (!val || val === "—") return true;
+    return val.includes("[Not enough information");
+  };
+
+  // Build scene context from populated fields for enhance prompts
+  const buildSceneContext = (profile: SceneProfile) => {
+    const contextParts: string[] = [];
+    const add = (label: string, val: string | undefined) => {
+      if (val && !isPlaceholderField(val)) contextParts.push(`${label}: ${val}`);
+    };
+    add("Scene Name", profile.sceneName);
+    add("Scene Number", profile.sceneNumber);
+    add("Logline", profile.logline);
+    add("Location", profile.location);
+    add("Time of Day", profile.timeOfDay);
+    add("Scene Type", profile.sceneType);
+    add("Narrative Purpose", profile.narrativePurpose);
+    add("Emotional Arc", profile.emotionalArc);
+    add("Characters & Objectives", profile.charactersAndObjectives);
+    add("Power Dynamics", profile.powerDynamics);
+    add("Key Dialogue Beats", profile.keyDialogueBeats);
+    add("Mood", profile.mood);
+    add("Lighting Setup", profile.lightingSetup);
+    add("Director's Notes", profile.directorNotes);
+    return contextParts.join("\n");
+  };
+
+  // Enhance a single field
+  const enhanceField = useCallback(async (sceneNumber: string, fieldKey: string, fieldLabel: string) => {
+    const dev = developedScenes[sceneNumber];
+    if (!dev) return;
+    setEnhancingField(fieldKey);
+    try {
+      const currentValue = (dev.profile as any)[fieldKey] || "";
+      const sceneContext = buildSceneContext(dev.profile);
+      const res = await apiRequest("POST", "/api/enhance", {
+        fieldKey,
+        fieldLabel,
+        currentValue,
+        sceneName: dev.profile.sceneName,
+        sceneContext,
+        provider,
+        apiKey,
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      setDevelopedScenes((prev) => ({
+        ...prev,
+        [sceneNumber]: {
+          ...prev[sceneNumber],
+          profile: { ...prev[sceneNumber].profile, [fieldKey]: data.enhanced },
+        },
+      }));
+      setEnhancedFields((prev) => {
+        const sceneSet = new Set(prev[sceneNumber] || []);
+        sceneSet.add(fieldKey);
+        return { ...prev, [sceneNumber]: sceneSet };
+      });
+      toast({ title: "Field enhanced", description: `${fieldLabel} has been enhanced with AI-generated content.` });
+    } catch (err: any) {
+      toast({ title: "Enhancement failed", description: err.message, variant: "destructive" });
+    } finally {
+      setEnhancingField(null);
+    }
+  }, [developedScenes, provider, apiKey, toast]);
+
+  // Enhance all empty/placeholder fields across all 10 sections
+  const enhanceAllEmpty = useCallback(async (sceneNumber: string) => {
+    const dev = developedScenes[sceneNumber];
+    if (!dev) return;
+    // Collect all fields that need enhancement
+    const fieldsToEnhance: { key: string; label: string }[] = [];
+    for (const sec of PROFILE_SECTIONS) {
+      for (const field of sec.fields) {
+        const val = (dev.profile as any)[field.key];
+        if (isPlaceholderField(val)) {
+          fieldsToEnhance.push({ key: field.key, label: field.label });
+        }
+      }
+    }
+    if (fieldsToEnhance.length === 0) {
+      toast({ title: "Nothing to enhance", description: "All fields already have content." });
+      return;
+    }
+    setEnhancingAll(true);
+    setEnhanceProgress({ current: 0, total: fieldsToEnhance.length });
+    for (let i = 0; i < fieldsToEnhance.length; i++) {
+      setEnhanceProgress({ current: i + 1, total: fieldsToEnhance.length });
+      await enhanceField(sceneNumber, fieldsToEnhance[i].key, fieldsToEnhance[i].label);
+      // Stagger requests to avoid rate limiting
+      if (i < fieldsToEnhance.length - 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+    setEnhancingAll(false);
+    setEnhanceProgress({ current: 0, total: 0 });
+    toast({ title: "Enhancement complete", description: `Enhanced ${fieldsToEnhance.length} fields across all sections.` });
+  }, [developedScenes, enhanceField, toast]);
 
   // Generate image
   const generateImage = useCallback(async (panelKey: string, prompt: string) => {
@@ -1861,6 +1969,27 @@ export default function Home() {
                 {analyzingScene === expandedScene ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
                 Re-develop
               </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-primary hover:text-primary/80 border border-primary/30 hover:border-primary/50"
+                onClick={() => enhanceAllEmpty(expandedScene)}
+                disabled={enhancingAll || !apiKey}
+                title="Enhance all empty/placeholder fields with AI"
+                data-testid="btn-enhance-all"
+              >
+                {enhancingAll ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    Enhancing {enhanceProgress.current} of {enhanceProgress.total}...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-3.5 h-3.5 mr-1" />
+                    Enhance All Empty
+                  </>
+                )}
+              </Button>
               <Button variant="secondary" size="sm" className="text-xs" onClick={() => exportDocx(expandedScene)} disabled={exportingDocx} data-testid="btn-export-scene">
                 <Download className="w-3.5 h-3.5 mr-1" />{exportingDocx ? "Exporting..." : "Export DOCX"}
               </Button>
@@ -1887,9 +2016,30 @@ export default function Home() {
                     </h3>
                     {sec.fields.map((field) => {
                       const val = (profile as any)[field.key];
+                      const needsEnhance = isPlaceholderField(val);
+                      const wasEnhanced = enhancedFields[expandedScene]?.has(field.key);
                       return (
-                        <div key={field.key} className="space-y-0.5" data-testid={`field-${field.key}`}>
-                          <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{field.label}</Label>
+                        <div key={field.key} className={`space-y-0.5 rounded-md px-2 py-1.5 -mx-2 transition-colors ${wasEnhanced ? "bg-green-500/10" : ""}`} data-testid={`field-${field.key}`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <Label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">{field.label}</Label>
+                            {needsEnhance && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 px-1.5 text-[10px] text-primary hover:text-primary/80 hover:bg-primary/10"
+                                onClick={() => enhanceField(expandedScene, field.key, field.label)}
+                                disabled={enhancingField === field.key || enhancingAll || !apiKey}
+                                title={`Enhance ${field.label} with AI`}
+                                data-testid={`btn-enhance-${field.key}`}
+                              >
+                                {enhancingField === field.key ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Wand2 className="w-3 h-3" />
+                                )}
+                              </Button>
+                            )}
+                          </div>
                           <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{val || "—"}</p>
                         </div>
                       );
