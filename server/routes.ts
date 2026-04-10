@@ -247,7 +247,7 @@ async function callImageAI(
         model: "dall-e-3",
         prompt: prompt,
         n: 1,
-        size: "1024x1024",
+        size: "1792x1024",
         response_format: "b64_json",
       }),
     });
@@ -304,6 +304,63 @@ async function callImageAI(
   throw new Error(
     `Image generation not supported for provider: ${provider}. Use OpenAI or Google.`
   );
+}
+
+/** Call text AI with automatic OpenAI fallback when a fallback key is available */
+async function callTextAIWithFallback(
+  provider: string,
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  openaiApiKey?: string
+): Promise<{ result: string; usedFallback: boolean }> {
+  try {
+    const result = await callTextAI(provider, apiKey, systemPrompt, userPrompt);
+    console.log(`[ai] Primary: ${provider} succeeded`);
+    return { result, usedFallback: false };
+  } catch (primaryErr: any) {
+    if (!openaiApiKey || provider === "openai") {
+      throw primaryErr;
+    }
+    console.warn(`[ai] Primary: ${provider} failed (${primaryErr.message}), falling back to OpenAI`);
+    try {
+      const result = await callTextAI("openai", openaiApiKey, systemPrompt, userPrompt);
+      console.log(`[ai] Fallback: OpenAI succeeded`);
+      return { result, usedFallback: true };
+    } catch (fallbackErr: any) {
+      console.error(`[ai] Fallback: OpenAI also failed: ${fallbackErr.message}`);
+      // Throw the original error since both failed
+      throw primaryErr;
+    }
+  }
+}
+
+/** Call image AI with automatic OpenAI fallback when a fallback key is available */
+async function callImageAIWithFallback(
+  provider: string,
+  apiKey: string,
+  prompt: string,
+  referenceImages?: string[],
+  openaiApiKey?: string
+): Promise<{ result: string; usedFallback: boolean }> {
+  try {
+    const result = await callImageAI(provider, apiKey, prompt, referenceImages);
+    console.log(`[image-ai] Primary: ${provider} succeeded`);
+    return { result, usedFallback: false };
+  } catch (primaryErr: any) {
+    if (!openaiApiKey || provider === "openai") {
+      throw primaryErr;
+    }
+    console.warn(`[image-ai] Primary: ${provider} failed (${primaryErr.message}), falling back to OpenAI DALL-E 3`);
+    try {
+      const result = await callImageAI("openai", openaiApiKey, prompt);
+      console.log(`[image-ai] Fallback: OpenAI DALL-E 3 succeeded`);
+      return { result, usedFallback: true };
+    } catch (fallbackErr: any) {
+      console.error(`[image-ai] Fallback: OpenAI DALL-E 3 also failed: ${fallbackErr.message}`);
+      throw primaryErr;
+    }
+  }
 }
 
 // ── Prompt Templates ──
@@ -920,13 +977,14 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
 
-      const { text, sourceType, provider, apiKey } = parsed.data;
+      const { text, sourceType, provider, apiKey, openaiApiKey } = parsed.data;
 
-      const result = await callTextAI(
+      const { result, usedFallback } = await callTextAIWithFallback(
         provider,
         apiKey,
         SCAN_SYSTEM_PROMPT,
-        `Here is the ${sourceType === "screenplay" ? "screenplay/script" : "prose manuscript"} text to analyze:\n\n${text}`
+        `Here is the ${sourceType === "screenplay" ? "screenplay/script" : "prose manuscript"} text to analyze:\n\n${text}`,
+        openaiApiKey
       );
 
       let scenes: DetectedScene[];
@@ -952,7 +1010,7 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         return res.status(422).json({ error: "Failed to parse AI response. Please try again." });
       }
 
-      return res.json({ scenes });
+      return res.json({ scenes, usedFallback });
     } catch (err: any) {
       console.error("Scan error:", err);
       return res.status(422).json({ error: err.message });
@@ -967,14 +1025,15 @@ export async function registerRoutes(httpServer: Server, app: Express) {
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
 
-      const { text, sourceType, provider, apiKey, sceneName, sceneNumber } = parsed.data;
+      const { text, sourceType, provider, apiKey, openaiApiKey, sceneName, sceneNumber } = parsed.data;
       const systemPrompt = buildAnalyzePrompt(sceneName, sceneNumber, sourceType);
 
-      const result = await callTextAI(
+      const { result, usedFallback } = await callTextAIWithFallback(
         provider,
         apiKey,
         systemPrompt,
-        `Here is the text to analyze for the scene "${sceneName}" (Scene #${sceneNumber}):\n\n${text}`
+        `Here is the text to analyze for the scene "${sceneName}" (Scene #${sceneNumber}):\n\n${text}`,
+        openaiApiKey
       );
 
       let profile: SceneProfile;
@@ -1025,7 +1084,7 @@ Lighting: ${profile.lightingSetup || "unspecified"}
 Shot List:
 ${profile.shotListDetailed}`;
 
-          const shotPromptResult = await callTextAI(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt);
+          const { result: shotPromptResult } = await callTextAIWithFallback(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt, openaiApiKey);
 
           // Parse the JSON array from the response
           let cleaned = shotPromptResult.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
@@ -1058,7 +1117,7 @@ ${profile.shotListDetailed}`;
         createdAt: new Date().toISOString(),
       });
 
-      return res.json({ profile, sceneId: saved.id });
+      return res.json({ profile, sceneId: saved.id, usedFallback });
     } catch (err: any) {
       console.error("Analyze error:", err);
 
@@ -1097,7 +1156,7 @@ ${profile.shotListDetailed}`;
   // Refresh all shot panels — runs ONLY the second AI call against existing shotListDetailed
   app.post("/api/refresh-shot-panels", async (req: Request, res: Response) => {
     try {
-      const { shotListDetailed, sceneName, sceneNumber, location, timeOfDay, mood, lightingSetup, provider, apiKey } = req.body;
+      const { shotListDetailed, sceneName, sceneNumber, location, timeOfDay, mood, lightingSetup, provider, apiKey, openaiApiKey } = req.body;
       if (!shotListDetailed || !sceneName || !provider || !apiKey) {
         return res.status(400).json({ error: "Missing required fields: shotListDetailed, sceneName, provider, apiKey" });
       }
@@ -1119,7 +1178,7 @@ Lighting: ${lightingSetup || "unspecified"}
 Shot List:
 ${shotListDetailed}`;
 
-      const shotPromptResult = await callTextAI(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt);
+      const { result: shotPromptResult, usedFallback } = await callTextAIWithFallback(provider, apiKey, shotPromptSystemPrompt, shotPromptUserPrompt, openaiApiKey);
 
       let cleaned = shotPromptResult.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
       const firstBracket = cleaned.indexOf("[");
@@ -1133,8 +1192,8 @@ ${shotListDetailed}`;
         return res.status(422).json({ error: "AI returned empty or invalid shot prompts array" });
       }
 
-      console.log(`[refresh-shot-panels] Generated ${shotPromptsArray.length} shot prompts for scene "${sceneName}"`);
-      return res.json({ visualShotPrompts: JSON.stringify(shotPromptsArray) });
+      console.log(`[refresh-shot-panels] Generated ${shotPromptsArray.length} shot prompts for scene "${sceneName}"${usedFallback ? " (via OpenAI fallback)" : ""}`);
+      return res.json({ visualShotPrompts: JSON.stringify(shotPromptsArray), usedFallback });
     } catch (err: any) {
       console.error("Refresh shot panels error:", err);
       return res.status(422).json({ error: err.message });
@@ -1144,7 +1203,7 @@ ${shotListDetailed}`;
   // Refresh a single shot's image prompt
   app.post("/api/refresh-single-shot-prompt", async (req: Request, res: Response) => {
     try {
-      const { shotDescription, sceneName, location, timeOfDay, mood, lightingSetup, provider, apiKey } = req.body;
+      const { shotDescription, sceneName, location, timeOfDay, mood, lightingSetup, provider, apiKey, openaiApiKey } = req.body;
       if (!shotDescription || !sceneName || !provider || !apiKey) {
         return res.status(400).json({ error: "Missing required fields: shotDescription, sceneName, provider, apiKey" });
       }
@@ -1160,11 +1219,11 @@ Lighting: ${lightingSetup || "unspecified"}
 Shot to visualize:
 ${shotDescription}`;
 
-      const result = await callTextAI(provider, apiKey, systemPrompt, userPrompt);
+      const { result, usedFallback } = await callTextAIWithFallback(provider, apiKey, systemPrompt, userPrompt, openaiApiKey);
       const prompt = result.trim();
 
       console.log(`[refresh-single-shot-prompt] Generated prompt for scene "${sceneName}": ${prompt.substring(0, 80)}...`);
-      return res.json({ prompt });
+      return res.json({ prompt, usedFallback });
     } catch (err: any) {
       console.error("Refresh single shot prompt error:", err);
       return res.status(422).json({ error: err.message });
@@ -1179,11 +1238,11 @@ ${shotDescription}`;
         return res.status(400).json({ error: parsed.error.errors[0].message });
       }
 
-      const { prompt, style, referenceImages, provider, apiKey } = parsed.data;
+      const { prompt, style, referenceImages, provider, apiKey, openaiApiKey } = parsed.data;
       const styledPrompt = style ? `${style}. ${prompt}` : prompt;
-      const base64 = await callImageAI(provider, apiKey, styledPrompt, referenceImages);
+      const { result: base64, usedFallback } = await callImageAIWithFallback(provider, apiKey, styledPrompt, referenceImages, openaiApiKey);
 
-      return res.json({ image: base64 });
+      return res.json({ image: base64, usedFallback });
     } catch (err: any) {
       console.error("Image generation error:", err);
       return res.status(422).json({ error: err.message });
@@ -1318,7 +1377,7 @@ ${shotDescription}`;
   // Enhance a single profile field using AI
   app.post("/api/enhance", async (req: Request, res: Response) => {
     try {
-      const { fieldKey, fieldLabel, currentValue, sceneName, sceneContext, provider, apiKey } = req.body;
+      const { fieldKey, fieldLabel, currentValue, sceneName, sceneContext, provider, apiKey, openaiApiKey } = req.body;
       if (!fieldKey || !fieldLabel || !sceneName || !provider || !apiKey) {
         return res.status(400).json({ error: "Missing required fields: fieldKey, fieldLabel, sceneName, provider, apiKey" });
       }
@@ -1352,11 +1411,11 @@ ${currentValue && !currentValue.includes("[Not enough information") ? `Current v
 
 Generate production-ready content for this field.`;
 
-      const result = await callTextAI(provider, apiKey, systemPrompt, userPrompt);
+      const { result, usedFallback } = await callTextAIWithFallback(provider, apiKey, systemPrompt, userPrompt, openaiApiKey);
       const enhanced = result.trim();
 
       console.log(`[enhance] Generated content for "${fieldLabel}" in scene "${sceneName}": ${enhanced.substring(0, 80)}...`);
-      return res.json({ enhanced });
+      return res.json({ enhanced, usedFallback });
     } catch (err: any) {
       console.error("Enhance field error:", err);
       return res.status(422).json({ error: err.message });

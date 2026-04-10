@@ -252,6 +252,8 @@ export default function Home() {
   const [provider, setProvider] = useState<Provider["id"]>("openai");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
 
   // Scenes
   const [detectedScenes, setDetectedScenes] = useState<DetectedScene[]>([]);
@@ -364,6 +366,7 @@ export default function Home() {
         if (state.sourceType) setSourceType(state.sourceType);
         if (state.provider) setProvider(state.provider);
         if (state.apiKey) setApiKey(state.apiKey);
+        if (state.openaiApiKey) setOpenaiApiKey(state.openaiApiKey);
         if (state.selectedStyle) setSelectedStyle(state.selectedStyle);
         if (state.detectedScenes?.length) {
           setDetectedScenes(state.detectedScenes);
@@ -439,6 +442,7 @@ export default function Home() {
             sourceType,
             provider,
             apiKey,
+            openaiApiKey,
             selectedStyle,
             detectedScenes,
             developedScenes,
@@ -455,7 +459,7 @@ export default function Home() {
     setManuscriptText(""); setDetectedScenes([]); setDevelopedScenes({});
     setReferenceImages([]); setImportedAssets([]);
     loadProjectList();
-  }, [loadProjectList, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
+  }, [loadProjectList, activeProjectId, manuscriptText, sourceType, provider, apiKey, openaiApiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
 
   // ── Auto-save to active project (debounced) ──
   const saveTimeout = useRef<any>(null);
@@ -472,6 +476,7 @@ export default function Home() {
             sourceType,
             provider,
             apiKey,
+            openaiApiKey,
             selectedStyle,
             detectedScenes,
             developedScenes,
@@ -481,7 +486,7 @@ export default function Home() {
         });
       } catch (err) { console.error("Auto-save failed:", err); }
     }, 2000);
-  }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
+  }, [sessionLoaded, activeProjectId, manuscriptText, sourceType, provider, apiKey, openaiApiKey, selectedStyle, detectedScenes, developedScenes, referenceImages, importedAssets]);
 
   // ── Auth submit ──
   async function handleAuthSubmit(e: React.FormEvent) {
@@ -596,18 +601,19 @@ export default function Home() {
         sourceType,
         provider,
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setDetectedScenes(data.scenes || []);
       setStep("dashboard");
-      toast({ title: "Scan complete", description: `Found ${(data.scenes || []).length} scenes.` });
+      toast({ title: "Scan complete", description: `Found ${(data.scenes || []).length} scenes.${data.usedFallback ? " (via OpenAI fallback)" : ""}` });
     } catch (err: any) {
       toast({ title: "Scan failed", description: err.message, variant: "destructive" });
     } finally {
       setScanning(false);
     }
-  }, [manuscriptText, apiKey, sourceType, provider, toast]);
+  }, [manuscriptText, apiKey, openaiApiKey, sourceType, provider, toast]);
 
   // Develop a single scene
   const developScene = useCallback(async (scene: DetectedScene) => {
@@ -624,6 +630,7 @@ export default function Home() {
         sourceType,
         provider,
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
         sceneName: scene.sceneName,
         sceneNumber: scene.sceneNumber,
       });
@@ -636,14 +643,14 @@ export default function Home() {
         ...prev,
         [scene.sceneNumber]: { profile: data.profile, images: {} },
       }));
-      toast({ title: "Scene developed", description: `Scene ${scene.sceneNumber}: ${scene.sceneName}` });
+      toast({ title: "Scene developed", description: `Scene ${scene.sceneNumber}: ${scene.sceneName}${data.usedFallback ? " (via OpenAI fallback)" : ""}` });
     } catch (err: any) {
       setFailedScenes((prev) => ({ ...prev, [scene.sceneNumber]: err.message }));
       toast({ title: "Development failed", description: err.message, variant: "destructive" });
     } finally {
       setAnalyzingScene(null);
     }
-  }, [manuscriptText, sourceType, provider, apiKey, toast]);
+  }, [manuscriptText, sourceType, provider, apiKey, openaiApiKey, toast]);
 
   // Develop all scenes — staggered with 3s delay between requests
   const developAll = useCallback(async () => {
@@ -721,6 +728,7 @@ export default function Home() {
         sceneContext,
         provider,
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -737,13 +745,13 @@ export default function Home() {
         sceneSet.add(fieldKey);
         return { ...prev, [sceneNumber]: sceneSet };
       });
-      toast({ title: "Field enhanced", description: `${fieldLabel} has been enhanced with AI-generated content.` });
+      toast({ title: "Field enhanced", description: `${fieldLabel} has been enhanced with AI-generated content.${data.usedFallback ? " (via OpenAI fallback)" : ""}` });
     } catch (err: any) {
       toast({ title: "Enhancement failed", description: err.message, variant: "destructive" });
     } finally {
       setEnhancingField(null);
     }
-  }, [developedScenes, provider, apiKey, toast]);
+  }, [developedScenes, provider, apiKey, openaiApiKey, toast]);
 
   // Enhance all empty/placeholder fields across all 10 sections
   const enhanceAllEmpty = useCallback(async (sceneNumber: string) => {
@@ -790,6 +798,7 @@ export default function Home() {
         referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
         provider: imageProvider as "openai" | "google",
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -805,7 +814,7 @@ export default function Home() {
     } finally {
       setGeneratingImage(null);
     }
-  }, [expandedScene, selectedStyle, referenceImages, imageProvider, apiKey, toast]);
+  }, [expandedScene, selectedStyle, referenceImages, imageProvider, apiKey, openaiApiKey, toast]);
 
   // Generate all images — uses dynamic shot panels when available, falls back to legacy
   const generateAllImages = useCallback(async () => {
@@ -853,6 +862,7 @@ export default function Home() {
         lightingSetup: profile.lightingSetup,
         provider,
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -882,7 +892,7 @@ export default function Home() {
     } finally {
       setRefreshingPanels(false);
     }
-  }, [expandedScene, developedScenes, provider, apiKey, toast]);
+  }, [expandedScene, developedScenes, provider, apiKey, openaiApiKey, toast]);
 
   // Refresh a single shot's image prompt
   const refreshSingleShotPrompt = useCallback(async (shotNumber: number) => {
@@ -908,6 +918,7 @@ export default function Home() {
         lightingSetup: profile.lightingSetup,
         provider,
         apiKey,
+        openaiApiKey: openaiApiKey || undefined,
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -932,7 +943,7 @@ export default function Home() {
     } finally {
       setRefreshingShotPrompt(null);
     }
-  }, [expandedScene, developedScenes, provider, apiKey, toast]);
+  }, [expandedScene, developedScenes, provider, apiKey, openaiApiKey, toast]);
 
   // Download single image
   const downloadImage = useCallback((base64: string, filename: string) => {
@@ -1538,6 +1549,34 @@ export default function Home() {
                     <AlertCircle className="w-3 h-3 inline mr-1" />
                     {currentProvider.name} doesn&apos;t support image generation. Visuals will use OpenAI.
                   </p>
+                )}
+                {provider !== "openai" && (
+                  <>
+                    <Separator />
+                    <Label className="text-xs text-muted-foreground">OpenAI API Key (fallback)</Label>
+                    <div className="relative">
+                      <Input
+                        type={showOpenaiKey ? "text" : "password"}
+                        value={openaiApiKey}
+                        onChange={(e) => setOpenaiApiKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="bg-background border-border text-sm font-mono pr-10"
+                        data-testid="input-openai-fallback-key"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                        onClick={() => setShowOpenaiKey(!showOpenaiKey)}
+                      >
+                        {showOpenaiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      <AlertCircle className="w-3 h-3 inline mr-1" />
+                      If {currentProvider.name} fails, OpenAI will be used as automatic fallback.
+                    </p>
+                  </>
                 )}
               </CardContent>
             </Card>

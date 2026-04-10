@@ -178,6 +178,7 @@ export const scanRequestSchema = z.object({
   sourceType: z.enum(["screenplay", "prose"]),
   provider: z.enum(["openai", "anthropic", "google"]),
   apiKey: z.string().min(1, "API key is required"),
+  openaiApiKey: z.string().optional(),
 });
 
 export type ScanRequest = z.infer<typeof scanRequestSchema>;
@@ -187,6 +188,7 @@ export const analyzeRequestSchema = z.object({
   sourceType: z.enum(["screenplay", "prose"]),
   provider: z.enum(["openai", "anthropic", "google"]),
   apiKey: z.string().min(1),
+  openaiApiKey: z.string().optional(),
   sceneName: z.string().min(1, "Scene name is required"),
   sceneNumber: z.string().min(1, "Scene number is required"),
 });
@@ -214,6 +216,7 @@ export const generateImageRequestSchema = z.object({
   referenceImages: z.array(z.string()).optional(),
   provider: z.enum(["openai", "google"]),
   apiKey: z.string().min(1),
+  openaiApiKey: z.string().optional(),
 });
 
 export type GenerateImageRequest = z.infer<typeof generateImageRequestSchema>;
