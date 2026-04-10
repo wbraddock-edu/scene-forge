@@ -1515,21 +1515,65 @@ export default function Home() {
         importedAt: now,
       }));
 
-      // Extract first images and add to referenceImages (up to 6 total)
-      // Normalise to full data URI in case sibling apps return raw base64
-      const newRefImages: string[] = [];
-      for (const asset of newAssets) {
+      // Helper: extract the first image from an asset as a data URI
+      const extractRefImage = (asset: ImportedAsset): string | null => {
         const rawImg = Object.values(asset.images)[0] as string | undefined;
-        if (rawImg) {
-          const uri = rawImg.startsWith("data:") ? rawImg : `data:image/png;base64,${rawImg}`;
-          newRefImages.push(uri);
+        if (!rawImg) return null;
+        return rawImg.startsWith("data:") ? rawImg : `data:image/png;base64,${rawImg}`;
+      };
+
+      // Deduplicate: replace existing assets with same name+source, append new ones
+      let updatedCount = 0;
+      let addedCount = 0;
+
+      setImportedAssets((prev) => {
+        const result = [...prev];
+        for (const asset of newAssets) {
+          const existingIdx = result.findIndex(
+            (a) => a.name === asset.name && a.source === asset.source
+          );
+          if (existingIdx !== -1) {
+            result[existingIdx] = asset;
+            updatedCount++;
+          } else {
+            result.push(asset);
+            addedCount++;
+          }
         }
-      }
+        return result;
+      });
 
-      setImportedAssets((prev) => [...prev, ...newAssets]);
-      setReferenceImages((prev) => [...prev, ...newRefImages].slice(0, 6));
+      // Deduplicate reference images in sync with asset dedup
+      setReferenceImages((prev) => {
+        const result = [...prev];
+        for (const asset of newAssets) {
+          const newRef = extractRefImage(asset);
+          // Find old asset to locate its existing reference image
+          const oldAsset = importedAssets.find(
+            (a) => a.name === asset.name && a.source === asset.source
+          );
+          if (oldAsset) {
+            const oldRef = extractRefImage(oldAsset);
+            if (oldRef && newRef) {
+              const oldIdx = result.indexOf(oldRef);
+              if (oldIdx !== -1) {
+                result[oldIdx] = newRef;
+                continue;
+              }
+            }
+          }
+          // New asset — append its reference image
+          if (newRef) {
+            result.push(newRef);
+          }
+        }
+        return result.slice(0, 6);
+      });
 
-      toast({ title: "Assets imported", description: `${newAssets.length} asset${newAssets.length !== 1 ? "s" : ""} added to Reference Library.` });
+      const parts: string[] = [];
+      if (addedCount > 0) parts.push(`${addedCount} imported`);
+      if (updatedCount > 0) parts.push(`${updatedCount} updated`);
+      toast({ title: "Assets imported", description: `${parts.join(", ")}.` });
       setStep("dashboard");
     };
 
