@@ -33,22 +33,59 @@ declare global {
   }
 }
 
+// ── Auth: session cookie config (shared Forge persistent-auth standard) ──
+
+const SESSION_COOKIE_NAME = "sessionToken";
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Shared cookie config. HttpOnly, Secure in prod, SameSite=Lax by default.
+ * Set FORGE_COOKIE_SAMESITE=none (with Secure) when the app is embedded
+ * cross-site — e.g. inside an iframe on another origin.
+ */
+function sessionCookieOptions(): import("express").CookieOptions {
+  const isProd = process.env.NODE_ENV === "production";
+  const sameSiteEnv = (process.env.FORGE_COOKIE_SAMESITE || "lax").toLowerCase();
+  const sameSite = (["lax", "strict", "none"].includes(sameSiteEnv) ? sameSiteEnv : "lax") as "lax" | "strict" | "none";
+  // SameSite=None requires Secure, per browser spec.
+  const secure = isProd || sameSite === "none";
+  return {
+    httpOnly: true,
+    secure,
+    sameSite,
+    path: "/",
+    maxAge: SESSION_MAX_AGE_MS,
+  };
+}
+
+function clearSessionCookie(res: Response) {
+  const opts = sessionCookieOptions();
+  // clearCookie needs matching attrs to actually clear in browsers.
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: opts.httpOnly,
+    secure: opts.secure,
+    sameSite: opts.sameSite,
+    path: opts.path,
+  });
+}
+
+function extractToken(req: Request): string | undefined {
+  const authHeader = req.headers["authorization"];
+  if (authHeader && typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    return authHeader.slice(7);
+  }
+  if (req.cookies?.[SESSION_COOKIE_NAME]) {
+    return req.cookies[SESSION_COOKIE_NAME];
+  }
+  const h = req.headers["x-session-token"];
+  if (h) return Array.isArray(h) ? h[0] : h;
+  return undefined;
+}
+
 // ── Auth Middleware ──
 
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  // Check Authorization header (Bearer token) or cookie
-  let token: string | undefined;
-
-  const authHeader = req.headers["authorization"];
-  if (authHeader && authHeader.startsWith("Bearer ")) {
-    token = authHeader.slice(7);
-  } else if (req.cookies?.sessionToken) {
-    token = req.cookies.sessionToken;
-  } else if (req.headers["x-session-token"]) {
-    const h = req.headers["x-session-token"];
-    token = Array.isArray(h) ? h[0] : h;
-  }
-
+  const token = extractToken(req);
   if (!token) {
     return res.status(401).json({ error: "Not authenticated" });
   }
@@ -769,16 +806,10 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       }).returning().get();
 
       const token = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS).toISOString();
       createSession(user.id, token, expiresAt);
 
-      // Set cookie
-      res.cookie("sessionToken", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions());
 
       return res.json({
         token,
@@ -802,18 +833,11 @@ export async function registerRoutes(httpServer: Server, app: Express) {
       if (!bcrypt.compareSync(password, user.passwordHash)) {
         return res.status(401).json({ error: "Invalid email or password" });
       }
-      const now = new Date().toISOString();
       const token = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS).toISOString();
       createSession(user.id, token, expiresAt);
 
-      // Set cookie
-      res.cookie("sessionToken", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 30 * 24 * 60 * 60 * 1000,
-      });
+      res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions());
 
       return res.json({
         token,
@@ -825,28 +849,28 @@ export async function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.post("/api/auth/logout", (req: Request, res: Response) => {
-    // Check both cookie and header for token
-    const rawTok = req.cookies?.sessionToken || req.headers["x-session-token"];
-    const token = Array.isArray(rawTok) ? rawTok[0] : rawTok;
+    const token = extractToken(req);
     if (token) {
-      deleteSession(token);
+      try { deleteSession(token); } catch { /* ignore */ }
     }
-    res.clearCookie("sessionToken");
+    clearSessionCookie(res);
     return res.json({ ok: true });
   });
 
   app.get("/api/auth/me", (req: Request, res: Response) => {
-    // Check both cookie and header for token
-    const rawTok2 = req.cookies?.sessionToken || req.headers["x-session-token"];
-    const token = Array.isArray(rawTok2) ? rawTok2[0] : rawTok2;
+    const token = extractToken(req);
     if (!token) return res.status(401).json({ error: "Not authenticated" });
 
     const session = getSessionByToken(token);
     if (!session || new Date(session.expiresAt) < new Date()) {
+      clearSessionCookie(res);
       return res.status(401).json({ error: "Session expired" });
     }
     const user = getUserById(session.userId);
-    if (!user) return res.status(401).json({ error: "User not found" });
+    if (!user) {
+      clearSessionCookie(res);
+      return res.status(401).json({ error: "User not found" });
+    }
 
     return res.json({
       id: user.id,
@@ -856,13 +880,13 @@ export async function registerRoutes(httpServer: Server, app: Express) {
     });
   });
 
-  app.post("/api/auth/forgot-password", (req: Request, res: Response) => {
+  app.post("/api/auth/forgot-password", (_req: Request, res: Response) => {
     // Stub — return success without revealing whether email exists
     return res.json({ ok: true, message: "If that email exists, a reset link has been sent." });
   });
 
-  app.post("/api/auth/reset-password", (req: Request, res: Response) => {
-    // Stub
+  app.post("/api/auth/reset-password", (_req: Request, res: Response) => {
+    // Stub — real implementation would verify a reset token then set a new cookie.
     return res.json({ ok: true, message: "Password reset is not yet configured." });
   });
 

@@ -2,7 +2,10 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-// ── Session token storage ──
+// ── Session token storage (legacy Bearer fallback) ──
+// The primary auth mechanism is an HttpOnly cookie set by the server. We keep
+// a localStorage token for backwards compatibility with older sessions and to
+// support contexts where third-party cookies are blocked.
 const SESSION_KEY = "scene_forge_token";
 
 export function getSessionToken(): string | null {
@@ -36,6 +39,7 @@ export async function apiRequest(
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers,
+    credentials: "include",
     body: data ? JSON.stringify(data) : undefined,
   });
 
@@ -53,7 +57,10 @@ export const getQueryFn: <T>(options: {
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`, { headers });
+    const res = await fetch(`${API_BASE}${queryKey.join("/")}`, {
+      headers,
+      credentials: "include",
+    });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

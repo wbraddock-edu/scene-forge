@@ -309,21 +309,24 @@ export default function Home() {
   const failedCount = Object.keys(failedScenes).length;
 
   // ── Check auth on mount ──
+  // Always probe /api/auth/me so an HttpOnly cookie from a prior session
+  // restores the user on hard refresh, not just when a Bearer token is in
+  // localStorage. Keep authChecked=false while we wait so we never bounce
+  // authenticated users to the login screen mid-bootstrap.
   useEffect(() => {
-    if (getSessionToken()) {
-      (async () => {
-        try {
-          const res = await apiRequest("GET", "/api/auth/me");
-          const user = await res.json();
-          setAuthUser(user);
-        } catch {
-          setSessionToken(null);
-        }
-        setAuthChecked(true);
-      })();
-    } else {
-      setAuthChecked(true);
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("GET", "/api/auth/me");
+        const user = await res.json();
+        if (!cancelled) setAuthUser(user);
+      } catch {
+        if (!cancelled) setSessionToken(null);
+      } finally {
+        if (!cancelled) setAuthChecked(true);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // ── Load subscription status ──
@@ -502,12 +505,14 @@ export default function Home() {
       const res = await fetch(API_BASE + endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || data.message || "Auth failed");
 
-      setSessionToken(data.token);
+      // HttpOnly cookie is the primary credential; Bearer token kept for back-compat.
+      if (data.token) setSessionToken(data.token);
       setAuthUser(data.user);
     } catch (err: any) {
       setAuthError(err.message);
