@@ -1932,7 +1932,7 @@ export default function Home() {
                           {isSelected && <Check className="w-2.5 h-2.5" style={{ color: "black" }} />}
                         </div>
                         {/* Thumbnail */}
-                        <div className="w-10 h-10 rounded-md overflow-hidden shrink-0" style={{ background: "hsl(225,15%,16%)", border: "1px solid hsl(225,10%,22%)" }}>
+                        <div className="w-16 rounded-md overflow-hidden shrink-0 aspect-video" style={{ background: "hsl(225,15%,16%)", border: "1px solid hsl(225,10%,22%)" }}>
                           {firstImg ? (
                             <img src={firstImg} alt={item.name} className="w-full h-full object-cover" />
                           ) : (
@@ -2147,7 +2147,7 @@ export default function Home() {
                   <span className="flex items-center gap-1 text-[11px]"><Image className="w-3 h-3" />References ({referenceImages.length}/6)</span>
                 </Label>
                 {referenceImages.map((_, i) => (
-                  <div key={i} className="w-8 h-8 rounded bg-muted border border-border flex items-center justify-center">
+                  <div key={i} className="w-14 rounded bg-muted border border-border flex items-center justify-center aspect-video">
                     <img src={`data:image/png;base64,${referenceImages[i]}`} className="w-full h-full object-cover rounded" alt={`ref-${i}`} />
                   </div>
                 ))}
@@ -2247,7 +2247,7 @@ export default function Home() {
 
                         return (
                           <div key={panel.key} className="relative group" data-testid={`visual-panel-${panel.key}`}>
-                            <div className="aspect-square bg-muted/50 rounded-lg border border-border overflow-hidden relative">
+                            <div className="aspect-video bg-muted/50 rounded-lg border border-border overflow-hidden relative">
                               {img ? (
                                 <>
                                   <img
@@ -2672,7 +2672,7 @@ export default function Home() {
                               >
                                 <X className="w-2.5 h-2.5 text-white" />
                               </button>
-                              <div className="w-16 h-16 rounded-lg overflow-hidden border" style={{ borderColor: "hsl(225,10%,18%)", background: "hsl(225,15%,10%)" }}>
+                              <div className="w-24 rounded-lg overflow-hidden border aspect-video" style={{ borderColor: "hsl(225,10%,18%)", background: "hsl(225,15%,10%)" }}>
                                 {firstImage ? (
                                   <img src={`data:image/png;base64,${firstImage}`} alt={asset.name} className="w-full h-full object-cover" />
                                 ) : (
@@ -2681,7 +2681,7 @@ export default function Home() {
                                   </div>
                                 )}
                               </div>
-                              <span className="text-[10px] font-mono text-center leading-tight line-clamp-2" style={{ color: "hsl(220,5%,75%)", maxWidth: 72 }}>{asset.name}</span>
+                              <span className="text-[10px] font-mono text-center leading-tight line-clamp-2" style={{ color: "hsl(220,5%,75%)", maxWidth: 96 }}>{asset.name}</span>
                             </div>
                           );
                         })}
